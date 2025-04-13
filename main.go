@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"syscall"
 	"unicode"
 	"unicode/utf8"
@@ -19,27 +21,34 @@ const (
 	insert
 )
 
-type line struct {
-	buffer []rune
+// character represents a single character, such as "a", "1", "#", space, tab, etc.
+type character struct {
+	// Usually only contains a single rune (length of runes is 1), but
+	// if it represetns tab, 4 spaces are used instead to simplify display logic.
+	r   rune
+	tab bool
 }
 
-func newline() *line {
-	return &line{buffer: []rune{}}
+func newCharacter(r rune) *character {
+	if r == '\t' {
+		return &character{tab: true}
+	}
+	return &character{r: r}
 }
 
-func (l *line) String() string {
-	return string(l.buffer)
+func (c *character) String() string {
+	if c.tab {
+		return "    "
+	}
+
+	return string(c.r)
 }
 
-func (l *line) width() int {
-	return len(l.buffer)
-}
+func (c *character) fullwidth() bool {
+	if c.tab {
+		return false
+	}
 
-func (l *line) copy() *line {
-	return &line{buffer: slices.Clone(l.buffer)}
-}
-
-func likelyFullwidth(r rune) bool {
 	fullwidth := &unicode.RangeTable{
 		R16: []unicode.Range16{
 			{0x3000, 0x3000, 1},
@@ -237,11 +246,35 @@ func likelyFullwidth(r rune) bool {
 		},
 	}
 
-	return unicode.Is(fullwidth, r) || unicode.Is(wide, r) || unicode.Is(ambiguous, r)
+	return unicode.Is(fullwidth, c.r) || unicode.Is(wide, c.r) || unicode.Is(ambiguous, c.r)
+}
+
+type line struct {
+	buffer []*character
+}
+
+func newline() *line {
+	return &line{buffer: []*character{}}
+}
+
+func (l *line) String() string {
+	sb := strings.Builder{}
+	for _, c := range l.buffer {
+		sb.WriteString(c.String())
+	}
+	return sb.String()
+}
+
+func (l *line) width() int {
+	return len(l.buffer)
+}
+
+func (l *line) copy() *line {
+	return &line{buffer: slices.Clone(l.buffer)}
 }
 
 func (l *line) insert(r rune, at int) {
-	l.buffer = slices.Insert(l.buffer, at, r)
+	l.buffer = slices.Insert(l.buffer, at, newCharacter(r))
 }
 
 type cursorpos struct {
@@ -254,6 +287,7 @@ type screen struct {
 	mode   mode
 	cursor cursorpos
 	lines  []*line
+	file   *os.File
 }
 
 type direction int
@@ -283,7 +317,13 @@ func (s *screen) syncCursor() {
 	x := 0
 	for i := range s.cursor.x {
 		width := 1
-		if likelyFullwidth(line.buffer[i]) {
+
+		// adjust cursor position based on character display width
+		switch {
+		case line.buffer[i].tab:
+			width = 4
+
+		case line.buffer[i].fullwidth():
 			width = 2
 		}
 		x += width
@@ -412,10 +452,9 @@ func main() {
 	}
 
 	s := &screen{
-		rows:  row,
-		cols:  col,
-		lines: []*line{newline()}, // initialize first line
-		mode:  normal,             // normal mode on startup
+		rows: row,
+		cols: col,
+		mode: normal, // normal mode on startup
 	}
 
 	refresh()
@@ -423,6 +462,59 @@ func main() {
 	cursorx, cursory := resetcursor()
 	s.cursor.x = cursorx
 	s.cursor.y = cursory
+
+	/*
+	 * file handling
+	 */
+
+	defer refresh()
+
+	flag.Parse()
+	args := flag.Args()
+	switch len(args) {
+	case 0:
+		s.lines = []*line{newline()} // initialize first line
+
+	case 1:
+		filename := args[0]
+		f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+		if err != nil {
+			panic(err)
+		}
+
+		s.file = f
+
+		defer s.file.Close()
+
+		s.lines = []*line{newline()} // initialize first line
+		currentline := 0
+
+		reader := bufio.NewReader(s.file)
+		for {
+			r, _, err := reader.ReadRune()
+			if err == io.EOF {
+				break
+			}
+
+			if err != nil {
+				panic(fmt.Sprintf("read a file: %v", err))
+			}
+
+			switch r {
+			case '\n':
+				s.lines = append(s.lines, newline())
+				currentline++
+
+			default:
+				s.lines[currentline].buffer = append(s.lines[currentline].buffer, newCharacter(r))
+			}
+		}
+
+		s.syncAll()
+
+	default:
+		panic("more than 2 args are passed")
+	}
 
 	/*
 	 * start editor main routine
@@ -446,8 +538,6 @@ func main() {
 		}
 
 		r, _ := utf8.DecodeRune(b)
-
-		// s.debug()
 
 		isArrowKey, dir := isarrowkey(b)
 		var (
@@ -543,6 +633,9 @@ func main() {
 		if cursormoved {
 			s.syncCursor()
 		}
+
+		s.debug()
+
 	}
 
 finish:
