@@ -23,9 +23,8 @@ const (
 
 // character represents a single character, such as "a", "1", "#", space, tab, etc.
 type character struct {
-	// Usually only contains a single rune (length of runes is 1), but
-	// if it represetns tab, 4 spaces are used instead to simplify display logic.
-	r   rune
+	r rune
+	// true if the character represents Tab.
 	tab bool
 }
 
@@ -37,6 +36,8 @@ func newCharacter(r rune) *character {
 }
 
 func (c *character) String() string {
+	// Raw Tab changes its size dynamically and it's hard to properly display, so
+	// Tab is treated as 4 spaces.
 	if c.tab {
 		return "    "
 	}
