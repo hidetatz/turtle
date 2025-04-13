@@ -11,6 +11,8 @@ By default, turtle editor is in normal mode.
 * `j`: move down
 * `k`: move up
 * `l`: move right
+* `o`: insert a line **below** the current cursor, then enter insert mode
+* `O`: insert a line **above** the current cursor, then enter insert mode
 
 ### insert mode
 

@@ -23,6 +23,10 @@ type line struct {
 	buffer []rune
 }
 
+func newline() *line {
+	return &line{buffer: []rune{}}
+}
+
 func (l *line) String() string {
 	return string(l.buffer)
 }
@@ -261,7 +265,20 @@ const (
 	right
 )
 
-func (s *screen) rendercursor() {
+func (s *screen) syncAll() {
+	s.syncLinesAfter(0)
+	s.syncCursor()
+}
+
+func (s *screen) syncLinesAfter(row int) {
+	for i := row; i < len(s.lines); i++ {
+		movecursor(0, i)
+		clearline()
+		fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[i].String()))
+	}
+}
+
+func (s *screen) syncCursor() {
 	line := s.lines[s.cursor.y]
 	x := 0
 	for i := range s.cursor.x {
@@ -331,6 +348,26 @@ func (s *screen) moveCursor(direction direction) bool {
 	}
 }
 
+func (s *screen) addline(direction direction) {
+	switch direction {
+	case up:
+		s.lines = slices.Insert(s.lines, s.cursor.y, newline())
+	case down:
+		s.lines = slices.Insert(s.lines, s.cursor.y+1, newline())
+	default:
+		panic("invalid direction is passed to addline")
+	}
+}
+
+func (s *screen) moveCursorToLineHead() bool {
+	if s.cursor.x == 0 {
+		return false
+	}
+
+	s.cursor.x = 0
+	return true
+}
+
 func (s *screen) debug() {
 	debug("cursor: {x: %v, y: %v}\n", s.cursor.x, s.cursor.y)
 }
@@ -377,8 +414,8 @@ func main() {
 	s := &screen{
 		rows:  row,
 		cols:  col,
-		lines: []*line{{}}, // initialize first line
-		mode:  normal,      // normal mode on startup
+		lines: []*line{newline()}, // initialize first line
+		mode:  normal,             // normal mode on startup
 	}
 
 	refresh()
@@ -426,6 +463,22 @@ func main() {
 			case r == 'i':
 				s.mode = insert
 
+			case r == 'o':
+				s.addline(down)
+				s.moveCursor(down)
+				s.moveCursorToLineHead()
+				s.syncLinesAfter(s.cursor.y)
+				cursormoved = true
+				s.mode = insert
+
+			case r == 'O':
+				s.addline(up)
+				s.moveCursor(up)
+				s.moveCursorToLineHead()
+				s.syncLinesAfter(s.cursor.y)
+				cursormoved = true
+				s.mode = insert
+
 			case r == 'h', isArrowKey && dir == left:
 				cursormoved = s.moveCursor(left)
 
@@ -465,7 +518,7 @@ func main() {
 				line.insert(r, s.cursor.x)
 				s.lines[s.cursor.y] = line
 
-				debug("%v, %v, %v\n", s.lines, s.cursor.x, s.cursor.y)
+				debug("%v, %v, %v, %v\n", len(s.lines), s.lines, s.cursor.x, s.cursor.y)
 
 				// save current cursor
 				curcursor := s.cursor
@@ -473,7 +526,8 @@ func main() {
 
 				// render
 				clearline()
-				resetcursor()
+				s.moveCursorToLineHead()
+				s.syncCursor() // this must be needed as moveCursorToLineHead changes the cursor position only logically.
 				fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()))
 
 				// restore cursor position
@@ -487,7 +541,7 @@ func main() {
 		}
 
 		if cursormoved {
-			s.rendercursor()
+			s.syncCursor()
 		}
 	}
 
