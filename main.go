@@ -76,8 +76,28 @@ func (l *line) insert(r rune, at int) {
 	l.buffer = slices.Insert(l.buffer, at, newCharacter(r))
 }
 
+func (l *line) deleteChar(at int) {
+	if l.width()-1 < at {
+		return
+	}
+
+	l.buffer = slices.Delete(l.buffer, at, at+1)
+}
+
 type cursorpos struct {
 	x, y int // left, top is (0, 0)
+
+	hist []*cursorpos // tail is the latest
+}
+
+func (c *cursorpos) save() {
+	c.hist = append(c.hist, &cursorpos{x: c.x, y: c.y})
+}
+
+// restore the cursor from the latest hist
+func (c *cursorpos) restore() {
+	c.x = c.hist[len(c.hist)-1].x
+	c.y = c.hist[len(c.hist)-1].y
 }
 
 type screen struct {
@@ -100,6 +120,15 @@ const (
 
 func (s *screen) syncAll() {
 	s.syncLinesAfter(0)
+	s.syncCursor()
+}
+
+func (s *screen) syncCurrentLine() {
+	s.cursor.save()
+	movecursor(0, s.cursor.y)
+	clearline()
+	fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[s.cursor.y].String()))
+	s.cursor.restore()
 	s.syncCursor()
 }
 
@@ -186,6 +215,11 @@ func (s *screen) addline(direction direction) {
 	default:
 		panic("invalid direction is passed to addline")
 	}
+}
+
+func (s *screen) deleteCurrentChar() {
+	line := s.lines[s.cursor.y]
+	line.deleteChar(s.cursor.x)
 }
 
 func (s *screen) moveCursorToLineHead() bool {
@@ -341,6 +375,10 @@ func main() {
 
 			case r == 'i':
 				s.mode = insert
+
+			case r == 'd':
+				s.deleteCurrentChar()
+				s.syncCurrentLine()
 
 			case r == 'o':
 				s.addline(down)
