@@ -309,6 +309,13 @@ func main() {
 
 	refresh()
 
+	/*
+	 * show status line
+	 */
+
+	movecursor(0, s.maxRows)
+	fmt.Fprint(os.Stdout, fmt.Sprintf("mode: NORMAL"))
+
 	cursorx, cursory := resetcursor()
 	s.cursor.x = cursorx
 	s.cursor.y = cursory
@@ -402,6 +409,9 @@ func main() {
 
 			case r == 'i':
 				s.mode = insert
+				movecursor(0, s.maxRows)
+				fmt.Fprint(os.Stdout, fmt.Sprintf("mode: INSERT"))
+				cursormoved = true
 
 			case r == 'd':
 				s.deleteCurrentChar()
@@ -440,6 +450,9 @@ func main() {
 			switch {
 			case r == 27: // Esc
 				s.mode = normal
+				movecursor(0, s.maxRows)
+				fmt.Fprint(os.Stdout, fmt.Sprintf("mode: NORMAL"))
+				cursormoved = true
 
 			case isArrowKey && dir == left:
 				cursormoved = s.moveCursor(left)
