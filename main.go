@@ -124,7 +124,8 @@ func (s *screen) syncCurrentLine() {
 	s.cursor.save()
 	movecursor(0, s.cursor.y)
 	clearline()
-	fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[s.currentLineIndex()].String()))
+	line := s.lines[s.currentLineIndex()]
+	fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()[:min(len(line.String()), s.maxCols)]))
 	s.cursor.restore()
 	s.syncCursor()
 }
@@ -136,10 +137,10 @@ func (s *screen) syncLinesAfter(row int) {
 		s.moveCursorToLineHead()
 		s.syncCursor()
 		clearline()
-		fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[s.currentLineIndex()].String()))
+		line := s.lines[s.currentLineIndex()]
+		fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()[:min(len(line.String()), s.maxCols)]))
 	}
 	s.cursor.restore()
-	s.syncCursor()
 }
 
 func (s *screen) syncCursor() {
@@ -258,7 +259,7 @@ func (s *screen) moveCursorToLineHead() bool {
 }
 
 func (s *screen) debug() {
-	debug("cursor: {x: %v, y: %v}\n", s.cursor.x, s.cursor.y)
+	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v} lines_count: %v, topline: %v\n", s.maxRows, s.maxCols, s.mode, s.cursor.x, s.cursor.y, len(s.lines), s.topline)
 }
 
 func main() {
@@ -301,7 +302,7 @@ func main() {
 	}
 
 	s := &screen{
-		maxRows: row,
+		maxRows: row - 2,
 		maxCols: col,
 		mode:    normal, // normal mode on startup
 	}
@@ -461,7 +462,7 @@ func main() {
 				line.insert(r, s.cursor.x)
 				s.lines[s.currentLineIndex()] = line
 
-				debug("%v, %v, %v, %v\n", len(s.lines), s.lines, s.cursor.x, s.cursor.y)
+				// debug("%v, %v, %v, %v\n", len(s.lines), s.lines, s.cursor.x, s.cursor.y)
 
 				// save current cursor
 				curcursor := s.cursor
@@ -471,7 +472,7 @@ func main() {
 				clearline()
 				s.moveCursorToLineHead()
 				s.syncCursor() // this must be needed as moveCursorToLineHead changes the cursor position only logically.
-				fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()))
+				fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()[:min(len(line.String()), s.maxCols)]))
 
 				// restore cursor position
 				s.cursor.x = curcursor.x
