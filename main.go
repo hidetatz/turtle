@@ -35,6 +35,18 @@ func newCharacter(r rune) *character {
 	return &character{r: r}
 }
 
+func (c *character) displayWidth() int {
+	if c.tab {
+		return 4
+	}
+
+	if c.fullwidth() {
+		return 2
+	}
+
+	return 1
+}
+
 func (c *character) String() string {
 	// Raw Tab changes its size dynamically and it's hard to properly display, so
 	// Tab is treated as 4 spaces.
@@ -317,17 +329,7 @@ func (s *screen) syncCursor() {
 	line := s.lines[s.cursor.y]
 	x := 0
 	for i := range s.cursor.x {
-		width := 1
-
-		// adjust cursor position based on character display width
-		switch {
-		case line.buffer[i].tab:
-			width = 4
-
-		case line.buffer[i].fullwidth():
-			width = 2
-		}
-		x += width
+		x += line.buffer[i].displayWidth()
 	}
 	movecursor(x, s.cursor.y)
 }
