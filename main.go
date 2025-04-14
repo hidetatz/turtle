@@ -101,12 +101,54 @@ func (c *cursorpos) restore() {
 }
 
 type screen struct {
-	rows   int
-	cols   int
-	mode   mode
-	cursor cursorpos
-	lines  []*line
-	file   *os.File
+	maxRows int
+	maxCols int
+	mode    mode
+	cursor  cursorpos
+	lines   []*line
+	file    *os.File
+	// the index of lines which is shown on the top of current screen.
+	topline int
+}
+
+func (s *screen) currentLineIndex() int {
+	return s.cursor.y + s.topline
+}
+
+func (s *screen) syncAll() {
+	s.syncLinesAfter(0)
+	s.syncCursor()
+}
+
+func (s *screen) syncCurrentLine() {
+	s.cursor.save()
+	movecursor(0, s.cursor.y)
+	clearline()
+	fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[s.currentLineIndex()].String()))
+	s.cursor.restore()
+	s.syncCursor()
+}
+
+func (s *screen) syncLinesAfter(row int) {
+	s.cursor.save()
+	for i := row; i < min(len(s.lines), s.maxRows); i++ {
+		s.cursor.y = i
+		s.moveCursorToLineHead()
+		s.syncCursor()
+		clearline()
+		fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[s.currentLineIndex()].String()))
+	}
+	s.cursor.restore()
+	s.syncCursor()
+}
+
+func (s *screen) syncCursor() {
+	line := s.lines[s.currentLineIndex()]
+	x := 0
+	for i := range s.cursor.x {
+		x += line.buffer[i].dispWidth
+	}
+	movecursor(x, s.cursor.y)
 }
 
 type direction int
@@ -118,67 +160,51 @@ const (
 	right
 )
 
-func (s *screen) syncAll() {
-	s.syncLinesAfter(0)
-	s.syncCursor()
-}
-
-func (s *screen) syncCurrentLine() {
-	s.cursor.save()
-	movecursor(0, s.cursor.y)
-	clearline()
-	fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[s.cursor.y].String()))
-	s.cursor.restore()
-	s.syncCursor()
-}
-
-func (s *screen) syncLinesAfter(row int) {
-	for i := row; i < len(s.lines); i++ {
-		movecursor(0, i)
-		clearline()
-		fmt.Fprint(os.Stdout, fmt.Sprintf("%s", s.lines[i].String()))
-	}
-}
-
-func (s *screen) syncCursor() {
-	line := s.lines[s.cursor.y]
-	x := 0
-	for i := range s.cursor.x {
-		x += line.buffer[i].dispWidth
-	}
-	movecursor(x, s.cursor.y)
-}
-
 func (s *screen) moveCursor(direction direction) bool {
 	current := s.cursor
 
 	switch direction {
 	case up:
-		if current.y == 0 {
+		// when cursor is on the top and the first line is shown at the top,
+		// do nothing.
+		if current.y == 0 && s.topline == 0 {
 			return false
 		}
 
-		s.cursor.y = current.y - 1 // move up
+		if current.y == 0 {
+			// when cursor is on the top but still upper line exists,
+			// scroll 1 line up but the cursor itself does not move.
+			s.topline--
+			s.syncLinesAfter(0)
+		} else {
+			// else, move the cursor itself
+			s.cursor.y = current.y - 1 // move up
+		}
 
 		// if upper line is shorter, the x should be the end of the upper line
-		upperline := s.lines[s.cursor.y]
-		if upperline.width() < current.x {
-			s.cursor.x = upperline.width()
+		curline := s.lines[s.currentLineIndex()]
+		if curline.width() < current.x {
+			s.cursor.x = curline.width()
 		}
 
 		return true
 
 	case down:
-		if current.y == len(s.lines)-1 {
+		if s.currentLineIndex() == len(s.lines)-1 {
 			return false
 		}
 
-		s.cursor.y = current.y + 1 // move down
+		if s.cursor.y == s.maxRows-1 && s.currentLineIndex() < len(s.lines)-1 {
+			s.topline++
+			s.syncLinesAfter(0)
+		} else {
+			s.cursor.y = current.y + 1 // move down
+		}
 
 		// if next line is shorter, the x should be the end of the next line
-		nextline := s.lines[s.cursor.y]
-		if nextline.width() < current.x {
-			s.cursor.x = nextline.width()
+		curline := s.lines[s.currentLineIndex()]
+		if curline.width() < current.x {
+			s.cursor.x = curline.width()
 		}
 
 		return true
@@ -193,7 +219,7 @@ func (s *screen) moveCursor(direction direction) bool {
 		return true
 
 	case right:
-		if current.x == s.lines[current.y].width() {
+		if current.x == s.lines[s.currentLineIndex()].width() {
 			return false
 		}
 
@@ -218,7 +244,7 @@ func (s *screen) addline(direction direction) {
 }
 
 func (s *screen) deleteCurrentChar() {
-	line := s.lines[s.cursor.y]
+	line := s.lines[s.currentLineIndex()]
 	line.deleteChar(s.cursor.x)
 }
 
@@ -275,9 +301,9 @@ func main() {
 	}
 
 	s := &screen{
-		rows: row,
-		cols: col,
-		mode: normal, // normal mode on startup
+		maxRows: row,
+		maxCols: col,
+		mode:    normal, // normal mode on startup
 	}
 
 	refresh()
@@ -431,9 +457,9 @@ func main() {
 
 			default:
 				// edit the line on memory
-				line := s.lines[s.cursor.y].copy()
+				line := s.lines[s.currentLineIndex()].copy()
 				line.insert(r, s.cursor.x)
-				s.lines[s.cursor.y] = line
+				s.lines[s.currentLineIndex()] = line
 
 				debug("%v, %v, %v, %v\n", len(s.lines), s.lines, s.cursor.x, s.cursor.y)
 
