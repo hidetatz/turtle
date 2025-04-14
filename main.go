@@ -235,9 +235,9 @@ func (s *screen) moveCursor(direction direction) bool {
 func (s *screen) addline(direction direction) {
 	switch direction {
 	case up:
-		s.lines = slices.Insert(s.lines, s.cursor.y, newline())
+		s.lines = slices.Insert(s.lines, s.currentLineIndex(), newline())
 	case down:
-		s.lines = slices.Insert(s.lines, s.cursor.y+1, newline())
+		s.lines = slices.Insert(s.lines, s.currentLineIndex()+1, newline())
 	default:
 		panic("invalid direction is passed to addline")
 	}
