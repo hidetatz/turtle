@@ -14,6 +14,8 @@ import (
 	"unsafe"
 )
 
+var _debug bool
+
 type mode int
 
 const (
@@ -155,7 +157,7 @@ type screen struct {
 
 	// whole text contents in the current buffer.
 	lines []*line
-	file  *os.File
+	// file  *os.File
 
 	// cursor position based on the character
 	cursor *cursorpos
@@ -190,7 +192,7 @@ func (s *screen) synchronize() {
 	// update status line
 	if s.modechanged {
 		s.term.putcursor(0, s.maxRows)
-		fmt.Fprint(os.Stdout, fmt.Sprintf("mode: %v", s.mode))
+		fmt.Fprint(s.term, fmt.Sprintf("mode: %v", s.mode))
 	}
 
 	// update lines
@@ -200,7 +202,7 @@ func (s *screen) synchronize() {
 			s.term.putcursor(0, i)
 			s.term.clearline()
 			line := s.lines[s.dispFromY+i]
-			fmt.Fprint(os.Stdout, line.cut(s.dispFromX, s.maxCols))
+			fmt.Fprint(s.term, line.cut(s.dispFromX, s.maxCols))
 		}
 	} else if len(s.changedlines) != 0 {
 		// when topline is not changed but some lines are changed, change only them
@@ -219,7 +221,7 @@ func (s *screen) synchronize() {
 			s.term.putcursor(0, l-s.dispFromY)
 			s.term.clearline()
 			line := s.lines[l-s.dispFromY]
-			fmt.Fprint(os.Stdout, line.cut(s.dispFromX, s.maxCols))
+			fmt.Fprint(s.term, line.cut(s.dispFromX, s.maxCols))
 		}
 	}
 
@@ -412,11 +414,39 @@ func (s *screen) debug() {
 }
 
 func main() {
+	dbg := os.Getenv("TURTLE_DEBUG")
+	if dbg != "" {
+		_debug = true
+	}
+
+	flag.Parse()
+	args := flag.Args()
+
+	var r io.Reader
+
+	switch len(args) {
+	case 0:
+		r = strings.NewReader("")
+
+	case 1:
+		filename := args[0]
+		f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		r = f
+
+	default:
+		panic("more than 2 args are passed")
+	}
+
 	term := &unixVT100term{}
-	editor(term)
+	editor(term, r, os.Stdin)
 }
 
-func editor(term terminal) {
+func editor(term terminal, text io.Reader, input io.Reader) {
 	fin, err := term.init()
 	if err != nil {
 		fin()
@@ -424,6 +454,7 @@ func editor(term terminal) {
 	}
 
 	defer fin()
+	defer term.refresh()
 
 	term.refresh()
 
@@ -448,33 +479,10 @@ func editor(term terminal) {
 		dispzoneChanged: true,
 	}
 
-	/*
-	 * file handling
-	 */
-
-	defer term.refresh()
-
-	flag.Parse()
-	args := flag.Args()
-	switch len(args) {
-	case 0:
-		s.lines = []*line{emptyline()} // initialize first line
-
-	case 1:
-		filename := args[0]
-		f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
-		if err != nil {
-			panic(err)
-		}
-
-		s.file = f
-
-		defer s.file.Close()
-
+	{
 		s.lines = []*line{emptyline()} // initialize first line
 		currentline := 0
-
-		reader := bufio.NewReader(s.file)
+		reader := bufio.NewReader(text)
 		for {
 			r, _, err := reader.ReadRune()
 			if err == io.EOF {
@@ -494,9 +502,6 @@ func editor(term terminal) {
 				s.lines[currentline].buffer = append(s.lines[currentline].buffer, newCharacter(r))
 			}
 		}
-
-	default:
-		panic("more than 2 args are passed")
 	}
 
 	s.synchronize()
@@ -505,7 +510,7 @@ func editor(term terminal) {
 	 * start editor main routine
 	 */
 
-	reader := bufio.NewReader(os.Stdin)
+	reader := bufio.NewReader(input)
 	for {
 		// a unicode character takes 4 bytes at most
 		b := make([]byte, 4)
@@ -579,7 +584,9 @@ func editor(term terminal) {
 				s.moveCursor(right)
 
 			case unicode.IsControl(r):
-				debug("control key is pressed: %v\n", r)
+				if _debug {
+					debug("control key is pressed: %v\n", r)
+				}
 
 			default:
 				s.insertChar(newCharacter(r))
@@ -591,13 +598,15 @@ func editor(term terminal) {
 		}
 
 		s.synchronize()
-		s.debug()
 
+		if _debug {
+			s.debug()
+		}
 	}
 
 finish:
 	term.refresh()
-	fmt.Fprintf(os.Stdout, "\n")
+	fmt.Fprintf(term, "\n")
 	term.putcursor(0, 0)
 }
 
@@ -636,6 +645,7 @@ type terminal interface {
 	refresh()
 	clearline()
 	putcursor(x, y int)
+	Write(data []byte) (n int, err error)
 }
 
 type unixVT100term struct{}
@@ -676,15 +686,19 @@ func (t *unixVT100term) windowsize() (int, int, error) {
 }
 
 func (t *unixVT100term) refresh() {
-	fmt.Fprint(os.Stdout, "\x1b[2J")
+	fmt.Fprint(t, "\x1b[2J")
 }
 
 func (t *unixVT100term) clearline() {
-	fmt.Fprint(os.Stdout, "\x1b[K")
+	fmt.Fprint(t, "\x1b[K")
 }
 
 func (t *unixVT100term) putcursor(x, y int) {
-	fmt.Fprint(os.Stdout, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
+	fmt.Fprint(t, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
+}
+
+func (t *unixVT100term) Write(data []byte) (n int, err error) {
+	return fmt.Fprint(os.Stdout, data)
 }
 
 /*
