@@ -144,6 +144,8 @@ type cursorpos struct {
 }
 
 type screen struct {
+	term terminal
+
 	// terminal screen height and width
 	maxRows int
 	maxCols int
@@ -168,9 +170,6 @@ type screen struct {
 	modechanged     bool
 	dispzoneChanged bool
 	changedlines    []int
-	cursormoved     bool
-
-	// actualCursor *cursorpos
 }
 
 func (s *screen) changeMode(mode mode) {
@@ -190,7 +189,7 @@ func (s *screen) currentLine() *line {
 func (s *screen) synchronize() {
 	// update status line
 	if s.modechanged {
-		movecursor(0, s.maxRows)
+		s.term.putcursor(0, s.maxRows)
 		fmt.Fprint(os.Stdout, fmt.Sprintf("mode: %v", s.mode))
 	}
 
@@ -198,8 +197,8 @@ func (s *screen) synchronize() {
 	if s.dispzoneChanged {
 		// when topline is changed, all shown lines must be updated
 		for i := 0; i < min(len(s.lines), s.maxRows); i++ {
-			movecursor(0, i)
-			clearline()
+			s.term.putcursor(0, i)
+			s.term.clearline()
 			line := s.lines[s.dispFromY+i]
 			fmt.Fprint(os.Stdout, line.cut(s.dispFromX, s.maxCols))
 		}
@@ -217,8 +216,8 @@ func (s *screen) synchronize() {
 				continue
 			}
 
-			movecursor(0, l-s.dispFromY)
-			clearline()
+			s.term.putcursor(0, l-s.dispFromY)
+			s.term.clearline()
 			line := s.lines[l-s.dispFromY]
 			fmt.Fprint(os.Stdout, line.cut(s.dispFromX, s.maxCols))
 		}
@@ -233,12 +232,11 @@ func (s *screen) synchronize() {
 		x = lim - 1
 	}
 
-	movecursor(x, s.cursor.y-s.dispFromY)
+	s.term.putcursor(x, s.cursor.y-s.dispFromY)
 
 	s.modechanged = false
 	s.dispzoneChanged = false
 	s.changedlines = []int{}
-	s.cursormoved = false
 }
 
 type direction int
@@ -270,7 +268,6 @@ func (s *screen) moveCursor(direction direction) {
 		default:
 			// just move the cursor itself
 			s.cursor.y--
-			s.cursormoved = true
 		}
 
 	case down:
@@ -288,7 +285,6 @@ func (s *screen) moveCursor(direction direction) {
 		default:
 			// just move the cursor itself
 			s.cursor.y++
-			s.cursormoved = true
 		}
 
 	case left:
@@ -337,8 +333,6 @@ func (s *screen) moveCursor(direction direction) {
 			}
 
 			s.cursor.x -= dispwidth + (s.cursor.x + s.dispFromX - alignedX)
-			// s.cursor.x -= dispwidth
-			s.cursormoved = true
 		}
 
 	case right:
@@ -381,7 +375,6 @@ func (s *screen) moveCursor(direction direction) {
 			}
 
 			s.cursor.x += dispwidth - (s.cursor.x + s.dispFromX - alignedX)
-			s.cursormoved = true
 		}
 
 	default:
@@ -419,47 +412,32 @@ func (s *screen) debug() {
 }
 
 func main() {
-	/*
-	 * Prepare terminal
-	 */
+	term := &unixVT100term{}
+	editor(term)
+}
 
-	var orig syscall.Termios
-	if err := ioctl_getTermios(&orig); err != nil {
-		panic(err)
+func editor(term terminal) {
+	fin, err := term.init()
+	if err != nil {
+		fin()
+		panic(fin)
 	}
 
-	// restore termios original setting at exit
-	defer func() {
-		if err := ioctl_setTermios(&orig); err != nil {
-			panic(err)
-		}
-	}()
+	defer fin()
 
-	conf := orig
-
-	// see https://github.com/antirez/kilo/blob/master/kilo.c#L226-L239
-	conf.Iflag &= ^(uint32(syscall.BRKINT) | uint32(syscall.ICRNL) | uint32(syscall.INPCK) | uint32(syscall.ISTRIP) | uint32(syscall.IXON))
-	conf.Oflag &= ^(uint32(syscall.OPOST))
-	conf.Cflag |= (uint32(syscall.CS8))
-	conf.Lflag &= ^(uint32(syscall.ECHO) | uint32(syscall.ICANON) | uint32(syscall.IEXTEN) | uint32(syscall.ISIG))
-	conf.Cc[syscall.VMIN] = 0
-	conf.Cc[syscall.VTIME] = 1
-	if err := ioctl_setTermios(&conf); err != nil {
-		panic(err)
-	}
-
-	refresh()
+	term.refresh()
 
 	/*
 	 * Prepare editor state
 	 */
 
-	row, col, _, _, err := ioctl_getWindowSize()
+	row, col, err := term.windowsize()
 	if err != nil {
 		panic(err)
 	}
 
 	s := &screen{
+		term:            term,
 		maxRows:         row - 2,
 		maxCols:         col,
 		mode:            normal,
@@ -468,14 +446,13 @@ func main() {
 		dispFromY:       0,
 		modechanged:     true,
 		dispzoneChanged: true,
-		cursormoved:     true,
 	}
 
 	/*
 	 * file handling
 	 */
 
-	defer refresh()
+	defer term.refresh()
 
 	flag.Parse()
 	args := flag.Args()
@@ -619,9 +596,9 @@ func main() {
 	}
 
 finish:
-	refresh()
+	term.refresh()
 	fmt.Fprintf(os.Stdout, "\n")
-	resetcursor()
+	term.putcursor(0, 0)
 }
 
 func isarrowkey(bs []byte) (bool, direction) {
@@ -649,24 +626,65 @@ func debug(format string, a ...any) (int, error) {
 	return fmt.Fprintf(os.Stderr, format, a...)
 }
 
-func refresh() {
+func ctrl(input byte) rune {
+	return rune(input & 0x1f)
+}
+
+type terminal interface {
+	init() (func(), error)
+	windowsize() (int, int, error)
+	refresh()
+	clearline()
+	putcursor(x, y int)
+}
+
+type unixVT100term struct{}
+
+func (t *unixVT100term) init() (func(), error) {
+	var orig syscall.Termios
+	if err := ioctl_getTermios(&orig); err != nil {
+		panic(err)
+	}
+
+	// restore termios original setting at exit
+	conf := orig
+
+	// see https://github.com/antirez/kilo/blob/master/kilo.c#L226-L239
+	conf.Iflag &= ^(uint32(syscall.BRKINT) | uint32(syscall.ICRNL) | uint32(syscall.INPCK) | uint32(syscall.ISTRIP) | uint32(syscall.IXON))
+	conf.Oflag &= ^(uint32(syscall.OPOST))
+	conf.Cflag |= (uint32(syscall.CS8))
+	conf.Lflag &= ^(uint32(syscall.ECHO) | uint32(syscall.ICANON) | uint32(syscall.IEXTEN) | uint32(syscall.ISIG))
+	conf.Cc[syscall.VMIN] = 0
+	conf.Cc[syscall.VTIME] = 1
+	if err := ioctl_setTermios(&conf); err != nil {
+		return nil, err
+	}
+
+	return func() {
+		if err := ioctl_setTermios(&orig); err != nil {
+			panic(err)
+		}
+	}, nil
+}
+
+func (t *unixVT100term) windowsize() (int, int, error) {
+	r, c, _, _, err := ioctl_getWindowSize()
+	if err != nil {
+		return 0, 0, err
+	}
+	return r, c, nil
+}
+
+func (t *unixVT100term) refresh() {
 	fmt.Fprint(os.Stdout, "\x1b[2J")
 }
 
-func clearline() {
+func (t *unixVT100term) clearline() {
 	fmt.Fprint(os.Stdout, "\x1b[K")
 }
 
-func resetcursor() {
-	movecursor(0, 0)
-}
-
-func movecursor(x, y int) {
+func (t *unixVT100term) putcursor(x, y int) {
 	fmt.Fprint(os.Stdout, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
-}
-
-func ctrl(input byte) rune {
-	return rune(input & 0x1f)
 }
 
 /*
@@ -681,7 +699,7 @@ func ioctl_getWindowSize() (int, int, int, int, error) {
 		Ypixel uint16
 	}
 	var w Winsize
-	err := ioctl(syscall.Stdout, syscall.TIOCGWINSZ, unsafe.Pointer(&w))
+	err := _ioctl(syscall.Stdout, syscall.TIOCGWINSZ, unsafe.Pointer(&w))
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -690,7 +708,7 @@ func ioctl_getWindowSize() (int, int, int, int, error) {
 }
 
 func ioctl_getTermios(termios *syscall.Termios) error {
-	if err := ioctl(syscall.Stdin, syscall.TCGETS, unsafe.Pointer(termios)); err != nil {
+	if err := _ioctl(syscall.Stdin, syscall.TCGETS, unsafe.Pointer(termios)); err != nil {
 		return err
 	}
 	return nil
@@ -699,13 +717,13 @@ func ioctl_getTermios(termios *syscall.Termios) error {
 func ioctl_setTermios(termios *syscall.Termios) error {
 	var TCSETSF uint = 0x5404 // not sure why but not defined in syscall package
 
-	if err := ioctl(syscall.Stdin, TCSETSF, unsafe.Pointer(termios)); err != nil {
+	if err := _ioctl(syscall.Stdin, TCSETSF, unsafe.Pointer(termios)); err != nil {
 		return err
 	}
 	return nil
 }
 
-func ioctl(fd int, op uint, arg unsafe.Pointer) error {
+func _ioctl(fd int, op uint, arg unsafe.Pointer) error {
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(op), uintptr(arg))
 	if errno != 0 {
 		var err error
