@@ -21,6 +21,21 @@ const (
 	insert
 )
 
+func (m mode) String() string {
+	switch m {
+	case normal:
+		return "NORMAL"
+	case insert:
+		return "INSERT"
+	default:
+		panic("unknown mode")
+	}
+}
+
+/*
+ * character
+ */
+
 // character represents a single character, such as "a", "1", "#", space, tab, etc.
 type character struct {
 	r rune
@@ -48,15 +63,20 @@ func (c *character) String() string {
 	return c.str
 }
 
+/*
+ * line
+ */
+
 type line struct {
 	buffer []*character
 }
 
-func newline() *line {
+func emptyline() *line {
 	return &line{buffer: []*character{}}
 }
 
 func (l *line) String() string {
+	// todo: can be cached
 	sb := strings.Builder{}
 	for _, c := range l.buffer {
 		sb.WriteString(c.String())
@@ -64,92 +84,161 @@ func (l *line) String() string {
 	return sb.String()
 }
 
-func (l *line) width() int {
+func (l *line) indexByCursor(cursor, offset int) int {
+	x := -offset
+	for i, c := range l.buffer {
+		x += c.dispWidth
+		if x >= cursor+1 {
+			return i
+		}
+	}
+
+	panic("should not come here")
+}
+
+func (l *line) length() int {
+	// todo: can be cached
 	return len(l.buffer)
 }
 
-func (l *line) copy() *line {
-	return &line{buffer: slices.Clone(l.buffer)}
+func (l *line) width() int {
+	// todo: can be cached
+	x := 0
+	for i := range l.length() {
+		x += l.buffer[i].dispWidth
+	}
+	return x
 }
 
-func (l *line) insert(r rune, at int) {
-	l.buffer = slices.Insert(l.buffer, at, newCharacter(r))
+func (l *line) insertChar(c *character, at int) {
+	l.buffer = slices.Insert(l.buffer, at, c)
 }
 
 func (l *line) deleteChar(at int) {
-	if l.width()-1 < at {
-		return
-	}
-
 	l.buffer = slices.Delete(l.buffer, at, at+1)
 }
 
+func (l *line) cut(from, limit int) string {
+	s := l.String()
+	length := len(s)
+
+	if length < from {
+		return ""
+	}
+
+	to := from + limit
+
+	if length < to {
+		to = length
+	}
+
+	return l.String()[from:to]
+}
+
+/*
+ * screen
+ */
+
 type cursorpos struct {
-	x, y int // left, top is (0, 0)
-
-	hist []*cursorpos // tail is the latest
-}
-
-func (c *cursorpos) save() {
-	c.hist = append(c.hist, &cursorpos{x: c.x, y: c.y})
-}
-
-// restore the cursor from the latest hist
-func (c *cursorpos) restore() {
-	c.x = c.hist[len(c.hist)-1].x
-	c.y = c.hist[len(c.hist)-1].y
+	x, y int
 }
 
 type screen struct {
+	// terminal screen height and width
 	maxRows int
 	maxCols int
-	mode    mode
-	cursor  cursorpos
-	lines   []*line
-	file    *os.File
-	// the index of lines which is shown on the top of current screen.
-	topline int
+
+	// current mode
+	mode mode
+
+	// whole text contents in the current buffer.
+	lines []*line
+	file  *os.File
+
+	// cursor position based on the character
+	cursor *cursorpos
+
+	// the index indicating the upper left corner of the rectangle that is
+	// cut from the text and actually displayed in the terminal.
+	dispFromX int
+	dispFromY int
+
+	// state dirtiness. if it's dirty, it means the actual terminal screen and
+	// the state of screen on memory are not synchronized. It's done in synchronize().
+	modechanged     bool
+	dispzoneChanged bool
+	changedlines    []int
+	cursormoved     bool
+
+	// actualCursor *cursorpos
 }
 
-func (s *screen) currentLineIndex() int {
-	return s.cursor.y + s.topline
+func (s *screen) changeMode(mode mode) {
+	s.mode = mode
+	s.modechanged = true
 }
 
-func (s *screen) syncAll() {
-	s.syncLinesAfter(0)
-	s.syncCursor()
+func (s *screen) currentChar() *character {
+	l := s.currentLine()
+	return l.buffer[l.indexByCursor(s.cursor.x, s.dispFromX)]
 }
 
-func (s *screen) syncCurrentLine() {
-	s.cursor.save()
-	movecursor(0, s.cursor.y)
-	clearline()
-	line := s.lines[s.currentLineIndex()]
-	fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()[:min(len(line.String()), s.maxCols)]))
-	s.cursor.restore()
-	s.syncCursor()
+func (s *screen) currentLine() *line {
+	return s.lines[s.cursor.y]
 }
 
-func (s *screen) syncLinesAfter(row int) {
-	s.cursor.save()
-	for i := row; i < min(len(s.lines), s.maxRows); i++ {
-		s.cursor.y = i
-		s.moveCursorToLineHead()
-		s.syncCursor()
-		clearline()
-		line := s.lines[s.currentLineIndex()]
-		fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()[:min(len(line.String()), s.maxCols)]))
+func (s *screen) synchronize() {
+	// update status line
+	if s.modechanged {
+		movecursor(0, s.maxRows)
+		fmt.Fprint(os.Stdout, fmt.Sprintf("mode: %v", s.mode))
 	}
-	s.cursor.restore()
-}
 
-func (s *screen) syncCursor() {
-	line := s.lines[s.currentLineIndex()]
-	x := 0
-	for i := range s.cursor.x {
-		x += line.buffer[i].dispWidth
+	// update lines
+	if s.dispzoneChanged {
+		// when topline is changed, all shown lines must be updated
+		for i := 0; i < min(len(s.lines), s.maxRows); i++ {
+			movecursor(0, i)
+			clearline()
+			line := s.lines[s.dispFromY+i]
+			fmt.Fprint(os.Stdout, line.cut(s.dispFromX, s.maxCols))
+		}
+	} else if len(s.changedlines) != 0 {
+		// when topline is not changed but some lines are changed, change only them
+		slices.Sort(s.changedlines)
+		for _, l := range slices.Compact(s.changedlines) {
+			// if changed line is above topline, no need to re-render.
+			if l < s.dispFromY {
+				continue
+			}
+
+			// if changed line is below screen bottom, no need to re-render.
+			if s.maxRows < l-s.dispFromY {
+				continue
+			}
+
+			movecursor(0, l-s.dispFromY)
+			clearline()
+			line := s.lines[l-s.dispFromY]
+			fmt.Fprint(os.Stdout, line.cut(s.dispFromX, s.maxCols))
+		}
 	}
-	movecursor(x, s.cursor.y)
+
+	// update cursor position
+	x := s.cursor.x
+	lim := s.currentLine().width() - s.dispFromX
+	if lim <= 0 {
+		x = 0
+	} else if lim-1 < x {
+		x = lim - 1
+	}
+
+	movecursor(x, s.cursor.y-s.dispFromY)
+
+	s.modechanged = false
+	s.dispzoneChanged = false
+	s.changedlines = []int{}
+	s.cursormoved = false
 }
 
 type direction int
@@ -161,105 +250,172 @@ const (
 	right
 )
 
-func (s *screen) moveCursor(direction direction) bool {
-	current := s.cursor
-
+func (s *screen) moveCursor(direction direction) {
 	switch direction {
 	case up:
-		// when cursor is on the top and the first line is shown at the top,
-		// do nothing.
-		if current.y == 0 && s.topline == 0 {
-			return false
-		}
+		switch {
+		case s.cursor.y == 0 && s.dispFromY == 0:
+			// case s.currentLineIndex() == 0:
+			// when cursor is on the top and the first line is shown at the top,
+			// do nothing.
+			return
 
-		if current.y == 0 {
+		case s.cursor.y-s.dispFromY == 0 && 0 < s.dispFromY:
 			// when cursor is on the top but still upper line exists,
 			// scroll 1 line up but the cursor itself does not move.
-			s.topline--
-			s.syncLinesAfter(0)
-		} else {
-			// else, move the cursor itself
-			s.cursor.y = current.y - 1 // move up
-		}
+			s.cursor.y--
+			s.dispFromY--
+			s.dispzoneChanged = true
 
-		// if upper line is shorter, the x should be the end of the upper line
-		curline := s.lines[s.currentLineIndex()]
-		if curline.width() < current.x {
-			s.cursor.x = curline.width()
+		default:
+			// just move the cursor itself
+			s.cursor.y--
+			s.cursormoved = true
 		}
-
-		return true
 
 	case down:
-		if s.currentLineIndex() == len(s.lines)-1 {
-			return false
-		}
+		switch {
+		case s.cursor.y == len(s.lines)-1:
+			// when there are no more lines, do nothing.
+			return
 
-		if s.cursor.y == s.maxRows-1 && s.currentLineIndex() < len(s.lines)-1 {
-			s.topline++
-			s.syncLinesAfter(0)
-		} else {
-			s.cursor.y = current.y + 1 // move down
-		}
+		case s.cursor.y-s.dispFromY == s.maxRows-1 && s.cursor.y < len(s.lines)-1:
+			// when cursor is at the bottom but lines still exist, scroll down.
+			s.cursor.y++
+			s.dispFromY++
+			s.dispzoneChanged = true
 
-		// if next line is shorter, the x should be the end of the next line
-		curline := s.lines[s.currentLineIndex()]
-		if curline.width() < current.x {
-			s.cursor.x = curline.width()
+		default:
+			// just move the cursor itself
+			s.cursor.y++
+			s.cursormoved = true
 		}
-
-		return true
 
 	case left:
-		if current.x == 0 {
-			return false
+		lim := s.currentLine().width()
+		if lim == 0 {
+			s.cursor.x = 0
+		} else if lim <= s.dispFromX {
+			s.cursor.x = 0
+		} else if lim <= s.cursor.x {
+			s.cursor.x = lim - s.dispFromX - 1
 		}
 
-		s.cursor.x -= 1
+		switch {
+		case s.cursor.x == 0 && s.dispFromX == 0:
+			return
 
-		return true
+		case s.cursor.x+s.dispFromX >= s.currentLine().width():
+			width := s.currentLine().width()
+			if width == 0 {
+				s.dispFromX = 0
+			} else {
+				s.dispFromX = width - 1
+			}
+			s.dispzoneChanged = true
+
+		case s.cursor.x == 0 && 0 < s.dispFromX:
+			// scroll to left
+			curidx := s.currentLine().indexByCursor(s.cursor.x, s.dispFromX)
+			dispwidth := s.currentLine().buffer[curidx-1].dispWidth
+			s.dispFromX -= dispwidth
+			s.dispzoneChanged = true
+
+		case s.cursor.x != 0 && s.currentLine().indexByCursor(s.cursor.x, s.dispFromX) == 0:
+			return
+
+		default:
+			curidx := s.currentLine().indexByCursor(s.cursor.x, s.dispFromX)
+			dispwidth := s.currentLine().buffer[curidx-1].dispWidth
+
+			l := s.currentLine()
+
+			alignedX := 0
+			for i := range curidx {
+				alignedX += l.buffer[i].dispWidth
+
+			}
+
+			s.cursor.x -= dispwidth + (s.cursor.x + s.dispFromX - alignedX)
+			// s.cursor.x -= dispwidth
+			s.cursormoved = true
+		}
 
 	case right:
-		if current.x == s.lines[s.currentLineIndex()].width() {
-			return false
+		lim := s.currentLine().width()
+		if lim == 0 {
+			s.cursor.x = 0
+		} else if lim <= s.dispFromX {
+			s.cursor.x = lim - 1
+		} else if lim <= s.cursor.x {
+			s.cursor.x = lim - s.dispFromX - 1
 		}
 
-		s.cursor.x += 1
+		curline := s.currentLine()
 
-		return true
+		switch {
+		case s.cursor.x+s.dispFromX > curline.width():
+			return
+
+		case s.cursor.x+s.dispFromX == curline.width()-1:
+			return
+
+		case s.cursor.x == s.maxCols-1 && s.cursor.x+s.dispFromX < curline.width()-1:
+			dispwidth := s.currentChar().dispWidth
+			s.dispFromX += dispwidth
+			s.dispzoneChanged = true
+
+		default:
+			l := s.currentLine()
+			if l.length() == 0 {
+				return
+			}
+
+			dispwidth := s.currentChar().dispWidth
+
+			idx := l.indexByCursor(s.cursor.x, s.dispFromX)
+			alignedX := 0
+			for i := range idx {
+				alignedX += l.buffer[i].dispWidth
+
+			}
+
+			s.cursor.x += dispwidth - (s.cursor.x + s.dispFromX - alignedX)
+			s.cursormoved = true
+		}
 
 	default:
 		panic("invalid direction is passed")
 	}
 }
 
-func (s *screen) addline(direction direction) {
+func (s *screen) insertline(direction direction) {
 	switch direction {
 	case up:
-		s.lines = slices.Insert(s.lines, s.currentLineIndex(), newline())
+		s.lines = slices.Insert(s.lines, s.cursor.y, emptyline())
 	case down:
-		s.lines = slices.Insert(s.lines, s.currentLineIndex()+1, newline())
+		s.lines = slices.Insert(s.lines, s.cursor.y+1, emptyline())
 	default:
 		panic("invalid direction is passed to addline")
 	}
+
+	for i := s.cursor.y; i < s.maxRows; i++ {
+		s.changedlines = append(s.changedlines, i)
+	}
+}
+
+func (s *screen) insertChar(c *character) {
+	s.currentLine().insertChar(c, s.cursor.x+s.dispFromX)
+	s.changedlines = append(s.changedlines, s.cursor.y)
 }
 
 func (s *screen) deleteCurrentChar() {
-	line := s.lines[s.currentLineIndex()]
-	line.deleteChar(s.cursor.x)
-}
-
-func (s *screen) moveCursorToLineHead() bool {
-	if s.cursor.x == 0 {
-		return false
-	}
-
-	s.cursor.x = 0
-	return true
+	s.currentLine().deleteChar(s.cursor.x + s.dispFromX)
+	s.changedlines = append(s.changedlines, s.cursor.y)
 }
 
 func (s *screen) debug() {
-	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v} lines_count: %v, topline: %v\n", s.maxRows, s.maxCols, s.mode, s.cursor.x, s.cursor.y, len(s.lines), s.topline)
+	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v}, lines_count: %v, curlinelength: %v, curlinewidth: %v, dispFromX: %v, dispFromY: %v\n", s.maxRows, s.maxCols, s.mode, s.cursor.x, s.cursor.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.dispFromX, s.dispFromY)
 }
 
 func main() {
@@ -292,6 +448,8 @@ func main() {
 		panic(err)
 	}
 
+	refresh()
+
 	/*
 	 * Prepare editor state
 	 */
@@ -302,23 +460,16 @@ func main() {
 	}
 
 	s := &screen{
-		maxRows: row - 2,
-		maxCols: col,
-		mode:    normal, // normal mode on startup
+		maxRows:         row - 2,
+		maxCols:         col,
+		mode:            normal,
+		cursor:          &cursorpos{x: 0, y: 0},
+		dispFromX:       0,
+		dispFromY:       0,
+		modechanged:     true,
+		dispzoneChanged: true,
+		cursormoved:     true,
 	}
-
-	refresh()
-
-	/*
-	 * show status line
-	 */
-
-	movecursor(0, s.maxRows)
-	fmt.Fprint(os.Stdout, fmt.Sprintf("mode: NORMAL"))
-
-	cursorx, cursory := resetcursor()
-	s.cursor.x = cursorx
-	s.cursor.y = cursory
 
 	/*
 	 * file handling
@@ -330,7 +481,7 @@ func main() {
 	args := flag.Args()
 	switch len(args) {
 	case 0:
-		s.lines = []*line{newline()} // initialize first line
+		s.lines = []*line{emptyline()} // initialize first line
 
 	case 1:
 		filename := args[0]
@@ -343,7 +494,7 @@ func main() {
 
 		defer s.file.Close()
 
-		s.lines = []*line{newline()} // initialize first line
+		s.lines = []*line{emptyline()} // initialize first line
 		currentline := 0
 
 		reader := bufio.NewReader(s.file)
@@ -359,7 +510,7 @@ func main() {
 
 			switch r {
 			case '\n':
-				s.lines = append(s.lines, newline())
+				s.lines = append(s.lines, emptyline())
 				currentline++
 
 			default:
@@ -367,11 +518,11 @@ func main() {
 			}
 		}
 
-		s.syncAll()
-
 	default:
 		panic("more than 2 args are passed")
 	}
+
+	s.synchronize()
 
 	/*
 	 * start editor main routine
@@ -397,9 +548,6 @@ func main() {
 		r, _ := utf8.DecodeRune(b)
 
 		isArrowKey, dir := isarrowkey(b)
-		var (
-			cursormoved bool
-		)
 
 		switch s.mode {
 		case normal:
@@ -408,105 +556,69 @@ func main() {
 				goto finish
 
 			case r == 'i':
-				s.mode = insert
-				movecursor(0, s.maxRows)
-				fmt.Fprint(os.Stdout, fmt.Sprintf("mode: INSERT"))
-				cursormoved = true
+				s.changeMode(insert)
 
 			case r == 'd':
 				s.deleteCurrentChar()
-				s.syncCurrentLine()
 
 			case r == 'o':
-				s.addline(down)
+				s.insertline(down)
 				s.moveCursor(down)
-				s.moveCursorToLineHead()
-				s.syncLinesAfter(s.cursor.y)
-				cursormoved = true
-				s.mode = insert
+				s.changeMode(insert)
 
 			case r == 'O':
-				s.addline(up)
+				s.insertline(up)
 				s.moveCursor(up)
-				s.moveCursorToLineHead()
-				s.syncLinesAfter(s.cursor.y)
-				cursormoved = true
-				s.mode = insert
+				s.changeMode(insert)
 
 			case r == 'h', isArrowKey && dir == left:
-				cursormoved = s.moveCursor(left)
+				s.moveCursor(left)
 
 			case r == 'j', isArrowKey && dir == down:
-				cursormoved = s.moveCursor(down)
+				s.moveCursor(down)
 
 			case r == 'k', isArrowKey && dir == up:
-				cursormoved = s.moveCursor(up)
+				s.moveCursor(up)
 
 			case r == 'l', isArrowKey && dir == right:
-				cursormoved = s.moveCursor(right)
+				s.moveCursor(right)
 			}
 
 		case insert:
 			switch {
 			case r == 27: // Esc
-				s.mode = normal
-				movecursor(0, s.maxRows)
-				fmt.Fprint(os.Stdout, fmt.Sprintf("mode: NORMAL"))
-				cursormoved = true
+				s.changeMode(normal)
 
 			case isArrowKey && dir == left:
-				cursormoved = s.moveCursor(left)
+				s.moveCursor(left)
 
 			case isArrowKey && dir == down:
-				cursormoved = s.moveCursor(down)
+				s.moveCursor(down)
 
 			case isArrowKey && dir == up:
-				cursormoved = s.moveCursor(up)
+				s.moveCursor(up)
 
 			case isArrowKey && dir == right:
-				cursormoved = s.moveCursor(right)
+				s.moveCursor(right)
 
 			case unicode.IsControl(r):
 				debug("control key is pressed: %v\n", r)
 
 			default:
-				// edit the line on memory
-				line := s.lines[s.currentLineIndex()].copy()
-				line.insert(r, s.cursor.x)
-				s.lines[s.currentLineIndex()] = line
-
-				// debug("%v, %v, %v, %v\n", len(s.lines), s.lines, s.cursor.x, s.cursor.y)
-
-				// save current cursor
-				curcursor := s.cursor
-				curcursor.x += 1
-
-				// render
-				clearline()
-				s.moveCursorToLineHead()
-				s.syncCursor() // this must be needed as moveCursorToLineHead changes the cursor position only logically.
-				fmt.Fprint(os.Stdout, fmt.Sprintf("%s", line.String()[:min(len(line.String()), s.maxCols)]))
-
-				// restore cursor position
-				s.cursor.x = curcursor.x
-				s.cursor.y = curcursor.y
-				cursormoved = true
+				s.insertChar(newCharacter(r))
+				s.cursor.x++
 			}
 
 		default:
 			panic("unknown mode")
 		}
 
-		if cursormoved {
-			s.syncCursor()
-		}
-
+		s.synchronize()
 		s.debug()
 
 	}
 
 finish:
-
 	refresh()
 	fmt.Fprintf(os.Stdout, "\n")
 	resetcursor()
@@ -545,13 +657,12 @@ func clearline() {
 	fmt.Fprint(os.Stdout, "\x1b[K")
 }
 
-func resetcursor() (int, int) {
-	return movecursor(0, 0)
+func resetcursor() {
+	movecursor(0, 0)
 }
 
-func movecursor(x, y int) (int, int) {
+func movecursor(x, y int) {
 	fmt.Fprint(os.Stdout, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
-	return x, y
 }
 
 func ctrl(input byte) rune {
