@@ -12,8 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pkg/term/termios"
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 var _debug bool
@@ -657,30 +657,11 @@ type unixVT100term struct {
 }
 
 func (t *unixVT100term) init() (func(), error) {
-	var orig unix.Termios
-	if err := termios.Tcgetattr(uintptr(unix.Stdin), &orig); err != nil {
-		panic(err)
+	oldstate, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return func() {}, err
 	}
-
-	// restore termios original setting at exit
-	conf := orig
-
-	// see https://github.com/antirez/kilo/blob/master/kilo.c#L226-L239
-	conf.Iflag &= ^(uint64(syscall.BRKINT) | uint64(syscall.ICRNL) | uint64(syscall.INPCK) | uint64(syscall.ISTRIP) | uint64(syscall.IXON))
-	conf.Oflag &= ^(uint64(syscall.OPOST))
-	conf.Cflag |= (uint64(syscall.CS8))
-	conf.Lflag &= ^(uint64(syscall.ECHO) | uint64(syscall.ICANON) | uint64(syscall.IEXTEN) | uint64(syscall.ISIG))
-	conf.Cc[syscall.VMIN] = 0
-	conf.Cc[syscall.VTIME] = 1
-	if err := termios.Tcsetattr(uintptr(unix.Stdin), termios.TCSAFLUSH, &conf); err != nil {
-		return nil, err
-	}
-
-	return func() {
-		if err := termios.Tcsetattr(uintptr(unix.Stdin), termios.TCSAFLUSH, &orig); err != nil {
-			panic(err)
-		}
-	}, nil
+	return func() { term.Restore(int(os.Stdin.Fd()), oldstate) }, nil
 }
 
 func (t *unixVT100term) windowsize() (int, int, error) {
