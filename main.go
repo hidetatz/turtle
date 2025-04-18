@@ -439,10 +439,11 @@ func main() {
 		r = f
 
 	default:
-		panic("more than 2 args are passed")
+		fmt.Println("more than 2 args are passed")
+		return
 	}
 
-	term := &unixVT100term{}
+	term := &unixVT100term{out: os.Stdout}
 	editor(term, r, os.Stdin)
 }
 
@@ -606,7 +607,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 finish:
 	term.refresh()
-	fmt.Fprintf(term, "\n")
+	fmt.Fprintf(os.Stdout, "\n")
 	term.putcursor(0, 0)
 }
 
@@ -640,15 +641,18 @@ func ctrl(input byte) rune {
 }
 
 type terminal interface {
+	io.Writer
+
 	init() (func(), error)
 	windowsize() (int, int, error)
 	refresh()
 	clearline()
 	putcursor(x, y int)
-	Write(data []byte) (n int, err error)
 }
 
-type unixVT100term struct{}
+type unixVT100term struct {
+	out io.Writer
+}
 
 func (t *unixVT100term) init() (func(), error) {
 	var orig syscall.Termios
@@ -697,8 +701,8 @@ func (t *unixVT100term) putcursor(x, y int) {
 	fmt.Fprint(t, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
 }
 
-func (t *unixVT100term) Write(data []byte) (n int, err error) {
-	return fmt.Fprint(os.Stdout, data)
+func (t *unixVT100term) Write(p []byte) (int, error) {
+	return t.out.Write(p)
 }
 
 /*
