@@ -8,11 +8,9 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"syscall"
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -665,12 +663,8 @@ func (t *unixVT100term) init() (func(), error) {
 }
 
 func (t *unixVT100term) windowsize() (int, int, error) {
-	winsize, err := unix.IoctlGetWinsize(syscall.Stdout, syscall.TIOCGWINSZ)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return int(winsize.Row), int(winsize.Col), nil
+	width, height, err := term.GetSize(int(os.Stdout.Fd()))
+	return height, width, err
 }
 
 func (t *unixVT100term) refresh() {
