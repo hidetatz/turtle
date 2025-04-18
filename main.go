@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"unicode"
 	"unicode/utf8"
-	"unsafe"
+
+	"github.com/pkg/term/termios"
+	"golang.org/x/sys/unix"
 )
 
 var _debug bool
@@ -655,8 +657,8 @@ type unixVT100term struct {
 }
 
 func (t *unixVT100term) init() (func(), error) {
-	var orig syscall.Termios
-	if err := ioctl_getTermios(&orig); err != nil {
+	var orig unix.Termios
+	if err := termios.Tcgetattr(uintptr(unix.Stdin), &orig); err != nil {
 		panic(err)
 	}
 
@@ -664,29 +666,30 @@ func (t *unixVT100term) init() (func(), error) {
 	conf := orig
 
 	// see https://github.com/antirez/kilo/blob/master/kilo.c#L226-L239
-	conf.Iflag &= ^(uint32(syscall.BRKINT) | uint32(syscall.ICRNL) | uint32(syscall.INPCK) | uint32(syscall.ISTRIP) | uint32(syscall.IXON))
-	conf.Oflag &= ^(uint32(syscall.OPOST))
-	conf.Cflag |= (uint32(syscall.CS8))
-	conf.Lflag &= ^(uint32(syscall.ECHO) | uint32(syscall.ICANON) | uint32(syscall.IEXTEN) | uint32(syscall.ISIG))
+	conf.Iflag &= ^(uint64(syscall.BRKINT) | uint64(syscall.ICRNL) | uint64(syscall.INPCK) | uint64(syscall.ISTRIP) | uint64(syscall.IXON))
+	conf.Oflag &= ^(uint64(syscall.OPOST))
+	conf.Cflag |= (uint64(syscall.CS8))
+	conf.Lflag &= ^(uint64(syscall.ECHO) | uint64(syscall.ICANON) | uint64(syscall.IEXTEN) | uint64(syscall.ISIG))
 	conf.Cc[syscall.VMIN] = 0
 	conf.Cc[syscall.VTIME] = 1
-	if err := ioctl_setTermios(&conf); err != nil {
+	if err := termios.Tcsetattr(uintptr(unix.Stdin), termios.TCSAFLUSH, &conf); err != nil {
 		return nil, err
 	}
 
 	return func() {
-		if err := ioctl_setTermios(&orig); err != nil {
+		if err := termios.Tcsetattr(uintptr(unix.Stdin), termios.TCSAFLUSH, &orig); err != nil {
 			panic(err)
 		}
 	}, nil
 }
 
 func (t *unixVT100term) windowsize() (int, int, error) {
-	r, c, _, _, err := ioctl_getWindowSize()
+	winsize, err := unix.IoctlGetWinsize(syscall.Stdout, syscall.TIOCGWINSZ)
 	if err != nil {
 		return 0, 0, err
 	}
-	return r, c, nil
+
+	return int(winsize.Row), int(winsize.Col), nil
 }
 
 func (t *unixVT100term) refresh() {
@@ -703,62 +706,6 @@ func (t *unixVT100term) putcursor(x, y int) {
 
 func (t *unixVT100term) Write(p []byte) (int, error) {
 	return t.out.Write(p)
-}
-
-/*
- * ioctl stuff
- */
-
-func ioctl_getWindowSize() (int, int, int, int, error) {
-	type Winsize struct {
-		Row    uint16
-		Col    uint16
-		Xpixel uint16
-		Ypixel uint16
-	}
-	var w Winsize
-	err := _ioctl(syscall.Stdout, syscall.TIOCGWINSZ, unsafe.Pointer(&w))
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-
-	return int(w.Row), int(w.Col), int(w.Xpixel), int(w.Ypixel), nil
-}
-
-func ioctl_getTermios(termios *syscall.Termios) error {
-	if err := _ioctl(syscall.Stdin, syscall.TCGETS, unsafe.Pointer(termios)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func ioctl_setTermios(termios *syscall.Termios) error {
-	var TCSETSF uint = 0x5404 // not sure why but not defined in syscall package
-
-	if err := _ioctl(syscall.Stdin, TCSETSF, unsafe.Pointer(termios)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func _ioctl(fd int, op uint, arg unsafe.Pointer) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(op), uintptr(arg))
-	if errno != 0 {
-		var err error
-		// https://www.man7.org/linux/man-pages/man2/ioctl.2.html#ERRORS
-		switch errno {
-		case syscall.EBADF:
-			err = fmt.Errorf("fd is not a valid")
-		case syscall.EFAULT:
-			err = fmt.Errorf("arg fault")
-		case syscall.EINVAL:
-			err = fmt.Errorf("invalid op or arg")
-		case syscall.ENOTTY:
-			err = fmt.Errorf("fd is not a character special dev")
-		}
-		return err
-	}
-	return nil
 }
 
 /*
