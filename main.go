@@ -77,6 +77,15 @@ func emptyline() *line {
 	return &line{buffer: []*character{}}
 }
 
+func newlinefromstring(s string) *line {
+	runes := []rune(s)
+	buff := make([]*character, len(runes))
+	for i := range runes {
+		buff[i] = newCharacter(runes[i])
+	}
+	return &line{buffer: buff}
+}
+
 func (l *line) String() string {
 	// todo: can be cached
 	sb := strings.Builder{}
@@ -500,31 +509,17 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		dispFromY:       0,
 		modechanged:     true,
 		dispzoneChanged: true,
+		lines:           []*line{},
 	}
 
-	{
-		s.lines = []*line{emptyline()} // initialize first line
-		currentline := 0
-		reader := bufio.NewReader(text)
-		for {
-			r, _, err := reader.ReadRune()
-			if err == io.EOF {
-				break
-			}
+	scanner := bufio.NewScanner(text)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.lines = append(s.lines, newlinefromstring(line))
+	}
 
-			if err != nil {
-				panic(fmt.Sprintf("read a file: %v", err))
-			}
-
-			switch r {
-			case '\n':
-				s.lines = append(s.lines, emptyline())
-				currentline++
-
-			default:
-				s.lines[currentline].buffer = append(s.lines[currentline].buffer, newCharacter(r))
-			}
-		}
+	if len(s.lines) == 0 {
+		s.lines = []*line{emptyline()}
 	}
 
 	s.synchronize()
