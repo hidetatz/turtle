@@ -112,6 +112,14 @@ func (l *line) width() int {
 	return x
 }
 
+func (l *line) widthTo(idx int) int {
+	x := 0
+	for i := range idx {
+		x += l.buffer[i].dispWidth
+	}
+	return x
+}
+
 func (l *line) insertChar(c *character, at int) {
 	l.buffer = slices.Insert(l.buffer, at, c)
 }
@@ -255,7 +263,6 @@ func (s *screen) moveCursor(direction direction) {
 	case up:
 		switch {
 		case s.cursor.y == 0 && s.dispFromY == 0:
-			// case s.currentLineIndex() == 0:
 			// when cursor is on the top and the first line is shown at the top,
 			// do nothing.
 			return
@@ -290,93 +297,95 @@ func (s *screen) moveCursor(direction direction) {
 		}
 
 	case left:
-		lim := s.currentLine().width()
-		if lim == 0 {
-			s.cursor.x = 0
-		} else if lim <= s.dispFromX {
-			s.cursor.x = 0
-		} else if lim <= s.cursor.x {
-			s.cursor.x = lim - s.dispFromX - 1
-		}
-
-		switch {
-		case s.cursor.x == 0 && s.dispFromX == 0:
-			return
-
-		case s.cursor.x+s.dispFromX >= s.currentLine().width():
-			width := s.currentLine().width()
-			if width == 0 {
-				s.dispFromX = 0
-			} else {
-				s.dispFromX = width - 1
-			}
-			s.dispzoneChanged = true
-
-		case s.cursor.x == 0 && 0 < s.dispFromX:
-			// scroll to left
-			curidx := s.currentLine().indexByCursor(s.cursor.x, s.dispFromX)
-			dispwidth := s.currentLine().buffer[curidx-1].dispWidth
-			s.dispFromX -= dispwidth
-			s.dispzoneChanged = true
-
-		case s.cursor.x != 0 && s.currentLine().indexByCursor(s.cursor.x, s.dispFromX) == 0:
-			return
-
-		default:
-			curidx := s.currentLine().indexByCursor(s.cursor.x, s.dispFromX)
-			dispwidth := s.currentLine().buffer[curidx-1].dispWidth
-
-			l := s.currentLine()
-
-			alignedX := 0
-			for i := range curidx {
-				alignedX += l.buffer[i].dispWidth
-
-			}
-
-			s.cursor.x -= dispwidth + (s.cursor.x + s.dispFromX - alignedX)
-		}
-
-	case right:
-		lim := s.currentLine().width()
-		if lim == 0 {
-			s.cursor.x = 0
-		} else if lim <= s.dispFromX {
-			s.cursor.x = lim - 1
-		} else if lim <= s.cursor.x {
-			s.cursor.x = lim - s.dispFromX - 1
-		}
+		/*
+		 * move the cursor to the left character and scroll accordingly.
+		 */
 
 		curline := s.currentLine()
 
-		switch {
-		case s.cursor.x+s.dispFromX > curline.width():
-			return
-
-		case s.cursor.x+s.dispFromX == curline.width()-1:
-			return
-
-		case s.cursor.x == s.maxCols-1 && s.cursor.x+s.dispFromX < curline.width()-1:
-			dispwidth := s.currentChar().dispWidth
-			s.dispFromX += dispwidth
-			s.dispzoneChanged = true
-
-		default:
-			l := s.currentLine()
-			if l.length() == 0 {
+		// special case: the cursor can point the place on which no character exists.
+		// this happens if cursor moved up/down to not shown line as it's too short.
+		// move the cursor to the last character.
+		if curline.width()-1 < s.cursor.x+s.dispFromX {
+			// if empty line, move to the leftmost.
+			if curline.length() == 0 {
+				s.dispFromX = 0
+				s.dispzoneChanged = true
+				s.cursor.x = 0
 				return
 			}
 
-			dispwidth := s.currentChar().dispWidth
-
-			idx := l.indexByCursor(s.cursor.x, s.dispFromX)
-			alignedX := 0
-			for i := range idx {
-				alignedX += l.buffer[i].dispWidth
-
+			// if the most right character is not shown, move to it.
+			if curline.width()-1 < s.dispFromX {
+				widthToLastchar := curline.widthTo(curline.length() - 1)
+				s.dispFromX = widthToLastchar
+				s.dispzoneChanged = true
+				s.cursor.x = 0
+				return
 			}
 
-			s.cursor.x += dispwidth - (s.cursor.x + s.dispFromX - alignedX)
+			// else, regard currently it's on the last character.
+			s.cursor.x = curline.width() - 1 - s.dispFromX
+			// then move to left character in the below code.
+		}
+
+		// usual case
+
+		curidx := curline.indexByCursor(s.cursor.x, s.dispFromX)
+
+		// if currently on the leftmost character, do not move.
+		if curidx == 0 {
+			if s.dispFromX != 0 {
+				s.dispFromX = 0
+				s.dispzoneChanged = true
+				s.cursor.x = 0
+			}
+			return
+		}
+
+		// move to the left character.
+		widthToLeftChar := curline.widthTo(curidx - 1)
+		s.cursor.x = widthToLeftChar - s.dispFromX
+
+		// if x is less than 0, do scroll.
+		if s.cursor.x < 0 {
+			s.dispFromX -= -s.cursor.x
+			s.dispzoneChanged = true
+			s.cursor.x = 0
+		}
+
+	case right:
+		/*
+		 * move the cursor to the right character and scroll accordingly.
+		 */
+
+		curline := s.currentLine()
+
+		// special case: the cursor can point the place on which no character exists.
+		// this happens if cursor moved up/down to not shown line as it's too short.
+		// do nothing.
+		if curline.width()-1 < s.cursor.x+s.dispFromX {
+			return
+		}
+
+		// usual case
+
+		curidx := curline.indexByCursor(s.cursor.x, s.dispFromX)
+
+		// if currently on the rightmost character, do not move.
+		if curidx == curline.length()-1 {
+			return
+		}
+
+		// move to the right character.
+		widthToRightChar := curline.widthTo(curidx + 1)
+		s.cursor.x = widthToRightChar - s.dispFromX
+
+		// if x is bigger than screen width, do scroll.
+		if s.maxCols-1 < s.cursor.x {
+			s.dispFromX += s.cursor.x - (s.maxCols - 1)
+			s.dispzoneChanged = true
+			s.cursor.x = s.maxCols - 1
 		}
 
 	default:

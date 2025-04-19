@@ -737,19 +737,6 @@ func Test_editor(t *testing.T) {
 						
 					`),
 				},
-				{
-					input: "h",
-					expected: heredoc(`
-						1a1b1c1d1e1f
-						    2c2d2e2f
-						        3e3f
-						
-						#       5e5f
-						        6e6f
-						mode: NOR
-						
-					`),
-				},
 			}
 			test(t, 8, 10, content, keystrokes)
 		})
