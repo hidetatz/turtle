@@ -427,11 +427,21 @@ func (s *screen) insertline(direction direction) {
 }
 
 func (s *screen) insertChar(c *character) {
-	s.currentLine().insertChar(c, s.curCharIdxX())
+	var idx int
+	if s.currentLine().length() == 0 {
+		idx = 0
+	} else {
+		idx = s.curCharIdxX()
+	}
+	s.currentLine().insertChar(c, idx)
 	s.changedlines = append(s.changedlines, s.cursor.y)
 }
 
 func (s *screen) deleteCurrentChar() {
+	if s.currentLine().length() == 0 {
+		return
+	}
+
 	s.currentLine().deleteChar(s.curCharIdxX())
 	s.changedlines = append(s.changedlines, s.cursor.y)
 }
