@@ -187,16 +187,33 @@ func (s *screen) changeMode(mode mode) {
 	s.modechanged = true
 }
 
-func (s *screen) currentChar() *character {
-	l := s.currentLine()
-	return l.buffer[l.indexByCursor(s.cursor.x, s.dispFromX)]
-}
-
 func (s *screen) currentLine() *line {
 	return s.lines[s.cursor.y]
 }
 
 func (s *screen) synchronize() {
+	// calculate cursor position first.
+	// this need to be here because it can change screen state internally.
+	curline := s.currentLine()
+
+	x := s.cursor.x
+	lim := curline.width() - s.dispFromX
+	if lim <= 0 {
+		x = 0
+	} else if lim-1 < x {
+		x = lim - 1
+	} else {
+		// move to the head of the character. this works if the character width is bigger than 1.
+		curidx := curline.indexByCursor(s.cursor.x, s.dispFromX)
+		widthToCurChar := curline.widthTo(curidx)
+		x = widthToCurChar - s.dispFromX
+		if x < 0 {
+			s.dispFromX -= -s.cursor.x
+			s.dispzoneChanged = true
+			x = 0
+		}
+	}
+
 	// update status line
 	if s.modechanged {
 		s.term.putcursor(0, s.maxRows)
@@ -233,15 +250,7 @@ func (s *screen) synchronize() {
 		}
 	}
 
-	// update cursor position
-	x := s.cursor.x
-	lim := s.currentLine().width() - s.dispFromX
-	if lim <= 0 {
-		x = 0
-	} else if lim-1 < x {
-		x = lim - 1
-	}
-
+	// move cursor after all.
 	s.term.putcursor(x, s.cursor.y-s.dispFromY)
 
 	s.modechanged = false
@@ -409,13 +418,17 @@ func (s *screen) insertline(direction direction) {
 }
 
 func (s *screen) insertChar(c *character) {
-	s.currentLine().insertChar(c, s.cursor.x+s.dispFromX)
+	s.currentLine().insertChar(c, s.curCharIdxX())
 	s.changedlines = append(s.changedlines, s.cursor.y)
 }
 
 func (s *screen) deleteCurrentChar() {
-	s.currentLine().deleteChar(s.cursor.x + s.dispFromX)
+	s.currentLine().deleteChar(s.curCharIdxX())
 	s.changedlines = append(s.changedlines, s.cursor.y)
+}
+
+func (s *screen) curCharIdxX() int {
+	return s.currentLine().indexByCursor(s.cursor.x, s.dispFromX)
 }
 
 func (s *screen) debug() {
@@ -600,7 +613,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			default:
 				s.insertChar(newCharacter(r))
-				s.cursor.x++
+				s.moveCursor(right)
 			}
 
 		default:
