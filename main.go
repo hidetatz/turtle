@@ -26,9 +26,9 @@ const (
 func (m mode) String() string {
 	switch m {
 	case normal:
-		return "NORMAL"
+		return "NOR"
 	case insert:
-		return "INSERT"
+		return "INS"
 	default:
 		panic("unknown mode")
 	}

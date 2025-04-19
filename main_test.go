@@ -13,7 +13,7 @@ import (
  * test
  */
 
-func Test_editor(t *testing.T) {
+func Test_editor_j_k(t *testing.T) {
 	content := heredoc(`
 		package main
 		
@@ -36,61 +36,544 @@ func Test_editor(t *testing.T) {
 	`)
 
 	tests := []struct {
-		name     string
-		inputs   func(in *virtstdin)
-		content  string
+		input    string
 		expected string
-		row, col int
 	}{
 		{
-			name:    "at first",
-			inputs:  func(in *virtstdin) {},
-			content: content,
+			input: "",
 			expected: heredoc(`
-					#ackage ma
-					
-					import (
-					    "bufio
-					    "fmt"
-					    "os"
-					mode: NORMAL
-					
-				`),
-			row: 8,
-			col: 10,
+				#ackage ma
+				
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
 		},
 		{
-			name: "move and scroll",
-			inputs: func(in *virtstdin) {
-				in.input("j")
-				in.input("j")
-				in.input("j")
-			},
-			content: content,
+			input: "k",
 			expected: heredoc(`
-					package ma
-					
-					import (
-					#   "bufio
-					    "fmt"
-					    "os"
-					mode: NORMAL
-					
-				`),
-			row: 8,
-			col: 10,
+				#ackage ma
+				
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				package ma
+				#
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				package ma
+				
+				#mport (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				package ma
+				
+				import (
+				#   "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				package ma
+				
+				import (
+				    "bufio
+				#   "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				package ma
+				
+				import (
+				    "bufio
+				    "fmt"
+				#   "os"
+				mode: NOR
+				
+			`),
+		},
+		// down scroll
+		{
+			input: "j",
+			expected: heredoc(`
+				
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				#   "strin
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				    "strin
+				#
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				    "bufio
+				    "fmt"
+				    "os"
+				    "strin
+				)
+				#
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				    "fmt"
+				    "os"
+				    "strin
+				)
+				
+				#unc main(
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				    "os"
+				    "strin
+				)
+				
+				func main(
+				#   scanne
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				    "strin
+				)
+				
+				func main(
+				    scanne
+				#   for sc
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				)
+				
+				func main(
+				    scanne
+				    for sc
+				#       fm
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				
+				func main(
+				    scanne
+				    for sc
+				        fm
+				#   }
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				func main(
+				    scanne
+				    for sc
+				        fm
+				    }
+				#   if err
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				    scanne
+				    for sc
+				        fm
+				    }
+				    if err
+				#       fm
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				    for sc
+				        fm
+				    }
+				    if err
+				        fm
+				#   }
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				        fm
+				    }
+				    if err
+				        fm
+				    }
+				#
+				mode: NOR
+				
+			`),
+		},
+		// stop at the bottom line
+		{
+			input: "j",
+			expected: heredoc(`
+				        fm
+				    }
+				    if err
+				        fm
+				    }
+				#
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "j",
+			expected: heredoc(`
+				        fm
+				    }
+				    if err
+				        fm
+				    }
+				#
+				mode: NOR
+				
+			`),
+		},
+		// go up
+		{
+			input: "k",
+			expected: heredoc(`
+				        fm
+				    }
+				    if err
+				        fm
+				#   }
+				}
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				        fm
+				    }
+				    if err
+				#       fm
+				    }
+				}
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				        fm
+				    }
+				#   if err
+				        fm
+				    }
+				}
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				        fm
+				#   }
+				    if err
+				        fm
+				    }
+				}
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#       fm
+				    }
+				    if err
+				        fm
+				    }
+				}
+				mode: NOR
+				
+			`),
+		},
+		// up scroll
+		{
+			input: "k",
+			expected: heredoc(`
+				#   for sc
+				        fm
+				    }
+				    if err
+				        fm
+				    }
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#   scanne
+				    for sc
+				        fm
+				    }
+				    if err
+				        fm
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#unc main(
+				    scanne
+				    for sc
+				        fm
+				    }
+				    if err
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#
+				func main(
+				    scanne
+				    for sc
+				        fm
+				    }
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#
+				
+				func main(
+				    scanne
+				    for sc
+				        fm
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#   "strin
+				)
+				
+				func main(
+				    scanne
+				    for sc
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#   "os"
+				    "strin
+				)
+				
+				func main(
+				    scanne
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#   "fmt"
+				    "os"
+				    "strin
+				)
+				
+				func main(
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#   "bufio
+				    "fmt"
+				    "os"
+				    "strin
+				)
+				
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#mport (
+				    "bufio
+				    "fmt"
+				    "os"
+				    "strin
+				)
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				    "strin
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#ackage ma
+				
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		// stops at the top line
+		{
+			input: "k",
+			expected: heredoc(`
+				#ackage ma
+				
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
+		},
+		{
+			input: "k",
+			expected: heredoc(`
+				#ackage ma
+				
+				import (
+				    "bufio
+				    "fmt"
+				    "os"
+				mode: NOR
+				
+			`),
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			term := newvirtterm(tc.row, tc.col)
-			in := newvirtstdin()
-			go editor(term, strings.NewReader(tc.content), in)
-			tc.inputs(in)
-			time.Sleep(30 * time.Millisecond) // wait for terminal in another goroutine finishes its work
-			assert(t, term, tc.expected)
-		})
+	term := newvirtterm(8, 10)
+	in := newvirtstdin()
+	go editor(term, strings.NewReader(content), in)
+
+	for i, tc := range tests {
+		in.input(tc.input)
+		time.Sleep(1 * time.Millisecond) // wait for terminal in another goroutine finishes its work
+		assert(t, i, term, tc.expected)
 	}
 }
 
@@ -99,11 +582,11 @@ func Test_editor(t *testing.T) {
  */
 
 // assertion
-func assert(t *testing.T, term *virtterm, expected string) {
+func assert(t *testing.T, i int, term *virtterm, expected string) {
 	t.Helper()
 	got := term.String()
 	if got != expected {
-		t.Fatalf("========== expected ==========\n%v\n==========\n========== got ==========\n%v\n==========", expected, got)
+		t.Fatalf("(test %v)\n========== expected ==========\n%v\n==========\n========== got ==========\n%v\n==========", i, expected, got)
 	}
 }
 
@@ -155,6 +638,10 @@ func (t *virtterm) String() string {
 		line := bytes.Runes(t.lines[y])
 
 		if len(line) == 0 && y != len(t.lines)-1 {
+			if y == t.curY && t.curX == 0 {
+				s += "#"
+			}
+
 			s += "\n"
 			continue
 		}
