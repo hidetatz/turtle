@@ -443,7 +443,7 @@ func main() {
 		return
 	}
 
-	term := &unixVT100term{out: os.Stdout}
+	term := &unixVT100term{}
 	editor(term, r, os.Stdin)
 }
 
@@ -650,9 +650,7 @@ type terminal interface {
 	putcursor(x, y int)
 }
 
-type unixVT100term struct {
-	out io.Writer
-}
+type unixVT100term struct{}
 
 func (t *unixVT100term) init() (func(), error) {
 	oldstate, err := term.MakeRaw(int(os.Stdin.Fd()))
@@ -680,7 +678,7 @@ func (t *unixVT100term) putcursor(x, y int) {
 }
 
 func (t *unixVT100term) Write(p []byte) (int, error) {
-	return t.out.Write(p)
+	return os.Stdout.Write(p)
 }
 
 /*
