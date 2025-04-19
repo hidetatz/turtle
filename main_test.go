@@ -13,582 +13,752 @@ import (
  * test
  */
 
-func Test_editor_j_k(t *testing.T) {
-	content := heredoc(`
-		package main
-		
-		import (
-			"bufio"
-			"fmt"
-			"os"
-			"strings"
-		)
-		
-		func main() {
-			scanner := bufio.NewScanner(strings.NewReader("gopher"))
-			for scanner.Scan() {
-				fmt.Println(len(scanner.Bytes()) == 6)
-			}
-			if err := scanner.Err(); err != nil {
-				fmt.Fprintln(os.Stderr, "shouldn't see an error scanning a string")
-			}
-		}
-	`)
-
-	tests := []struct {
+func Test_editor(t *testing.T) {
+	type keystroke struct {
 		input    string
 		expected string
-	}{
-		{
-			input: "",
-			expected: heredoc(`
-				#ackage ma
-				
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#ackage ma
-				
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				package ma
-				#
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				package ma
-				
-				#mport (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				package ma
-				
-				import (
-				#   "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				package ma
-				
-				import (
-				    "bufio
-				#   "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				package ma
-				
-				import (
-				    "bufio
-				    "fmt"
-				#   "os"
-				mode: NOR
-				
-			`),
-		},
-		// down scroll
-		{
-			input: "j",
-			expected: heredoc(`
-				
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				#   "strin
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				    "strin
-				#
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				    "bufio
-				    "fmt"
-				    "os"
-				    "strin
-				)
-				#
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				    "fmt"
-				    "os"
-				    "strin
-				)
-				
-				#unc main(
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				    "os"
-				    "strin
-				)
-				
-				func main(
-				#   scanne
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				    "strin
-				)
-				
-				func main(
-				    scanne
-				#   for sc
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				)
-				
-				func main(
-				    scanne
-				    for sc
-				#       fm
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				
-				func main(
-				    scanne
-				    for sc
-				        fm
-				#   }
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				func main(
-				    scanne
-				    for sc
-				        fm
-				    }
-				#   if err
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				    scanne
-				    for sc
-				        fm
-				    }
-				    if err
-				#       fm
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				    for sc
-				        fm
-				    }
-				    if err
-				        fm
-				#   }
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				        fm
-				    }
-				    if err
-				        fm
-				    }
-				#
-				mode: NOR
-				
-			`),
-		},
-		// stop at the bottom line
-		{
-			input: "j",
-			expected: heredoc(`
-				        fm
-				    }
-				    if err
-				        fm
-				    }
-				#
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "j",
-			expected: heredoc(`
-				        fm
-				    }
-				    if err
-				        fm
-				    }
-				#
-				mode: NOR
-				
-			`),
-		},
-		// go up
-		{
-			input: "k",
-			expected: heredoc(`
-				        fm
-				    }
-				    if err
-				        fm
-				#   }
-				}
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				        fm
-				    }
-				    if err
-				#       fm
-				    }
-				}
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				        fm
-				    }
-				#   if err
-				        fm
-				    }
-				}
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				        fm
-				#   }
-				    if err
-				        fm
-				    }
-				}
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#       fm
-				    }
-				    if err
-				        fm
-				    }
-				}
-				mode: NOR
-				
-			`),
-		},
-		// up scroll
-		{
-			input: "k",
-			expected: heredoc(`
-				#   for sc
-				        fm
-				    }
-				    if err
-				        fm
-				    }
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#   scanne
-				    for sc
-				        fm
-				    }
-				    if err
-				        fm
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#unc main(
-				    scanne
-				    for sc
-				        fm
-				    }
-				    if err
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#
-				func main(
-				    scanne
-				    for sc
-				        fm
-				    }
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#
-				
-				func main(
-				    scanne
-				    for sc
-				        fm
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#   "strin
-				)
-				
-				func main(
-				    scanne
-				    for sc
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#   "os"
-				    "strin
-				)
-				
-				func main(
-				    scanne
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#   "fmt"
-				    "os"
-				    "strin
-				)
-				
-				func main(
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#   "bufio
-				    "fmt"
-				    "os"
-				    "strin
-				)
-				
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#mport (
-				    "bufio
-				    "fmt"
-				    "os"
-				    "strin
-				)
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				    "strin
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#ackage ma
-				
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		// stops at the top line
-		{
-			input: "k",
-			expected: heredoc(`
-				#ackage ma
-				
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
-		{
-			input: "k",
-			expected: heredoc(`
-				#ackage ma
-				
-				import (
-				    "bufio
-				    "fmt"
-				    "os"
-				mode: NOR
-				
-			`),
-		},
 	}
 
-	term := newvirtterm(8, 10)
-	in := newvirtstdin()
-	go editor(term, strings.NewReader(content), in)
+	test := func(t *testing.T, row, col int, content string, keystrokes []keystroke) {
+		term := newvirtterm(row, col)
+		in := newvirtstdin()
+		go editor(term, strings.NewReader(content), in)
 
-	for i, tc := range tests {
-		in.input(tc.input)
-		time.Sleep(1 * time.Millisecond) // wait for terminal in another goroutine finishes its work
-		assert(t, i, term, tc.expected)
+		for i, tc := range keystrokes {
+			for _, r := range []rune(tc.input) {
+				in.input(string(r))
+			}
+			time.Sleep(1 * time.Millisecond) // wait for terminal in another goroutine finishes its work
+
+			got := term.String()
+			if got != tc.expected {
+				t.Fatalf("(test %v)\n========== expected ==========\n%v\n==========\n========== got ==========\n%v\n==========", i, tc.expected, got)
+			}
+		}
 	}
+
+	t.Run("cursor movement", func(t *testing.T) {
+		t.Run("hjkl basic", func(t *testing.T) {
+			content := heredoc(`
+				1a1b1c1d1e1f
+				2a2b2c2d2e2f
+				3a3b3c3d3e3f
+				4a4b4c4d4e4f
+				5a5b5c5d5e5f
+				6a6b6c6d6e6f
+				7a7b7c7d7e7f
+				8a8b8c8d8e8f
+			`)
+
+			keystrokes := []keystroke{
+				{
+					input: "",
+					expected: heredoc(`
+						#a1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						#a1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "k",
+					expected: heredoc(`
+						#a1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1#1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "k",
+					expected: heredoc(`
+						1#1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						#a1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "lllll",
+					expected: heredoc(`
+						1a1b1#1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "llll",
+					expected: heredoc(`
+						1a1b1c1d1#
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					// right scroll
+					expected: heredoc(`
+						a1b1c1d1e#
+						a2b2c2d2e2
+						a3b3c3d3e3
+						a4b4c4d4e4
+						a5b5c5d5e5
+						a6b6c6d6e6
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1b1c1d1e1#
+						2b2c2d2e2f
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					// stops at the right edge
+					input: "l",
+					expected: heredoc(`
+						1b1c1d1e1#
+						2b2c2d2e2f
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						2b2c2d2e2#
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						2b2c2d2e2f
+						3b3c3d3e3#
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						2b2c2d2e2f
+						3b3c3d3e3f
+						4b4c4d4e4#
+						5b5c5d5e5f
+						6b6c6d6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						2b2c2d2e2f
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5#
+						6b6c6d6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						2b2c2d2e2f
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6#
+						mode: NOR
+						
+					`),
+				},
+				{
+					// down scroll
+					input: "j",
+					expected: heredoc(`
+						2b2c2d2e2f
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						7b7c7d7e7#
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						7b7c7d7e7f
+						8b8c8d8e8#
+						mode: NOR
+						
+					`),
+				},
+				{
+					// stops at the bottom line
+					input: "j",
+					expected: heredoc(`
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						7b7c7d7e7f
+						8b8c8d8e8#
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						7b7c7d7e7f
+						8b8c8d8e#f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "hhh",
+					expected: heredoc(`
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5d5e5f
+						6b6c6d6e6f
+						7b7c7d7e7f
+						8b8c8#8e8f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "kkk",
+					expected: heredoc(`
+						3b3c3d3e3f
+						4b4c4d4e4f
+						5b5c5#5e5f
+						6b6c6d6e6f
+						7b7c7d7e7f
+						8b8c8d8e8f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "hhhhh",
+					expected: heredoc(`
+						3b3c3d3e3f
+						4b4c4d4e4f
+						#b5c5d5e5f
+						6b6c6d6e6f
+						7b7c7d7e7f
+						8b8c8d8e8f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						a3b3c3d3e3
+						a4b4c4d4e4
+						#5b5c5d5e5
+						a6b6c6d6e6
+						a7b7c7d7e7
+						a8b8c8d8e8
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						3a3b3c3d3e
+						4a4b4c4d4e
+						#a5b5c5d5e
+						6a6b6c6d6e
+						7a7b7c7d7e
+						8a8b8c8d8e
+						mode: NOR
+						
+					`),
+				},
+				{
+					// stops at the left edge
+					input: "h",
+					expected: heredoc(`
+						3a3b3c3d3e
+						4a4b4c4d4e
+						#a5b5c5d5e
+						6a6b6c6d6e
+						7a7b7c7d7e
+						8a8b8c8d8e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "kk",
+					expected: heredoc(`
+						#a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						7a7b7c7d7e
+						8a8b8c8d8e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "k",
+					expected: heredoc(`
+						#a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						7a7b7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "k",
+					expected: heredoc(`
+						#a1b1c1d1e
+						2a2b2c2d2e
+						3a3b3c3d3e
+						4a4b4c4d4e
+						5a5b5c5d5e
+						6a6b6c6d6e
+						mode: NOR
+						
+					`),
+				},
+			}
+
+			test(t, 8, 10, content, keystrokes)
+		})
+
+		t.Run("hjkl with with tab", func(t *testing.T) {
+			content := heredoc(`
+				1a1b1c1d1e1f
+					2c2d2e2f
+						3e3f
+				
+						5e5f
+						6e6f
+					7c7d7e7f
+				8a8b8c8d8e8f
+			`)
+
+			keystrokes := []keystroke{
+				{
+					input: "",
+					expected: heredoc(`
+						#a1b1c1d1e
+						    2c2d2e
+						        3e
+						
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1a1b1c1d1e
+						#   2c2d2e
+						        3e
+						
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    #c2d2e
+						        3e
+						
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						1a1b1c1d1e
+						#   2c2d2e
+						        3e
+						
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						#       3e
+						
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						#
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						#
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						#
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						
+						#       5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						
+						    #   5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						
+						        #e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						
+						        5#
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						a1b1c1d1e1
+						   2c2d2e2
+						       3e3
+						
+						       5e#
+						       6e6
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						
+						      5e5#
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "l",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						
+						      5e5#
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "k",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						#
+						      5e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "k",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3#
+						
+						      5e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "hh",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3#3f
+						
+						      5e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						#
+						      5e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						
+						      5#5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						
+						      #e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						1b1c1d1e1f
+						  2c2d2e2f
+						      3e3f
+						
+						  #   5e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						1a1b1c1d1e1f
+						    2c2d2e2f
+						        3e3f
+						
+						#       5e5f
+						        6e6f
+						mode: NOR
+						
+					`),
+				},
+			}
+			test(t, 8, 10, content, keystrokes)
+		})
+	})
 }
 
 /*
  * test utilities
  */
-
-// assertion
-func assert(t *testing.T, i int, term *virtterm, expected string) {
-	t.Helper()
-	got := term.String()
-	if got != expected {
-		t.Fatalf("(test %v)\n========== expected ==========\n%v\n==========\n========== got ==========\n%v\n==========", i, expected, got)
-	}
-}
 
 // virtual terminal on memory
 type virtterm struct {
