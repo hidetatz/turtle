@@ -43,6 +43,7 @@ type character struct {
 	r rune
 	// true if the character represents Tab.
 	tab       bool
+	nl        bool
 	dispWidth int
 	str       string
 }
@@ -52,6 +53,10 @@ func newCharacter(r rune) *character {
 		// Raw Tab changes its size dynamically and it's hard to properly display, so
 		// Tab is treated as 4 spaces.
 		return &character{tab: true, dispWidth: 4, str: "    "}
+	}
+
+	if r == '\n' {
+		return &character{nl: true, dispWidth: 1, str: " "}
 	}
 
 	if fullwidth(r) {
@@ -83,6 +88,7 @@ func newlinefromstring(s string) *line {
 	for i := range runes {
 		buff[i] = newCharacter(runes[i])
 	}
+	buff = append(buff, newCharacter('\n'))
 	return &line{buffer: buff}
 }
 
