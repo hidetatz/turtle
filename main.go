@@ -81,7 +81,7 @@ type line struct {
 }
 
 func emptyline() *line {
-	return &line{buffer: []*character{}}
+	return &line{buffer: []*character{newCharacter('\n')}}
 }
 
 func newlinefromstring(s string) *line {
@@ -249,21 +249,27 @@ func (s *screen) synchronize() {
 	} else if len(s.changedlines) != 0 {
 		// when topline is not changed but some lines are changed, change only them
 		slices.Sort(s.changedlines)
-		for _, l := range slices.Compact(s.changedlines) {
+		s.changedlines = slices.Compact(s.changedlines)
+		for _, l := range s.changedlines {
 			// if changed line is above topline, no need to re-render.
 			if l < s.dispFromY {
 				continue
 			}
 
 			// if changed line is below screen bottom, no need to re-render.
-			if s.maxRows < l-s.dispFromY {
+			if s.maxRows-1 < l-s.dispFromY {
 				continue
 			}
 
 			s.term.putcursor(0, l-s.dispFromY)
 			s.term.clearline()
-			line := s.lines[l-s.dispFromY]
-			fmt.Fprint(s.term, line.cut(s.dispFromX, s.maxCols))
+
+			// the line might be already deleted, render empty if so
+			var line string
+			if l <= len(s.lines)-1 {
+				line = s.lines[l].cut(s.dispFromX, s.maxCols)
+			}
+			fmt.Fprint(s.term, line)
 		}
 	}
 
@@ -429,7 +435,7 @@ func (s *screen) insertline(direction direction) {
 		panic("invalid direction is passed to addline")
 	}
 
-	for i := s.cursor.y; i < s.maxRows; i++ {
+	for i := s.cursor.y; i < len(s.lines); i++ {
 		s.changedlines = append(s.changedlines, i)
 	}
 }
@@ -446,16 +452,23 @@ func (s *screen) insertChar(c *character) {
 }
 
 func (s *screen) deleteCurrentChar() {
-	if s.currentLine().length() == 0 {
-		return
-	}
-
 	s.currentLine().deleteChar(s.curCharIdxX())
 	s.changedlines = append(s.changedlines, s.cursor.y)
 }
 
 func (s *screen) curCharIdxX() int {
 	return s.currentLine().indexByCursor(s.cursor.x, s.dispFromX)
+}
+
+func (s *screen) deleteCurrentLine() {
+	s.deleteLine(s.cursor.y)
+}
+
+func (s *screen) deleteLine(y int) {
+	for i := y; i < len(s.lines); i++ {
+		s.changedlines = append(s.changedlines, i)
+	}
+	s.lines = slices.Delete(s.lines, y, y+1)
 }
 
 func (s *screen) debug() {
@@ -577,7 +590,47 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(insert)
 
 			case r == 'd':
+				curline := s.currentLine()
+				width := curline.width()
+
+				// if the cursor is pointint the place on which no character exists ("too right"),
+				// move cursor to the rightmost character first.
+				if width-1 < s.cursor.x+s.dispFromX {
+					if width == 0 {
+						s.dispFromX = 0
+						s.cursor.x = 0
+						s.dispzoneChanged = true
+					} else if 0 < width-s.dispFromX {
+						s.cursor.x = width - s.dispFromX - 1
+					} else {
+						// show right edge character for useful
+						s.dispFromX = width - 2
+						s.cursor.x = 1
+						s.dispzoneChanged = true
+					}
+				}
+
+				removingNL := curline.indexByCursor(s.cursor.x, s.dispFromX) == curline.length()-1
+
+				if removingNL && s.cursor.y == len(s.lines)-1 {
+					// todo: this should just remove the nl
+					continue
+				}
+
 				s.deleteCurrentChar()
+				if removingNL {
+					// if nl is removed, concat current and next line.
+
+					// if nl at the last line is removed, just remove the line.
+					if s.cursor.y == len(s.lines)-1 && curline.length() == 0 {
+						s.deleteCurrentLine()
+					} else {
+						newline := &line{buffer: slices.Concat(curline.buffer, s.lines[s.cursor.y+1].buffer)}
+						s.deleteLine(s.cursor.y + 1)
+						s.lines[s.cursor.y] = newline
+						s.changedlines = append(s.changedlines, s.cursor.y)
+					}
+				}
 
 			case r == 'o':
 				s.insertline(down)
@@ -586,7 +639,6 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			case r == 'O':
 				s.insertline(up)
-				s.moveCursor(up)
 				s.changeMode(insert)
 
 			case r == 'h', isArrowKey && dir == left:
@@ -625,6 +677,26 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				}
 
 			default:
+				curline := s.currentLine()
+				width := curline.width()
+
+				// if the cursor is pointint the place on which no character exists ("too right"),
+				// move cursor to the rightmost character first.
+				if width-1 < s.cursor.x+s.dispFromX {
+					if width == 0 {
+						s.dispFromX = 0
+						s.cursor.x = 0
+						s.dispzoneChanged = true
+					} else if 0 < width-s.dispFromX {
+						s.cursor.x = width - s.dispFromX - 1
+					} else {
+						// show right edge character for useful
+						s.dispFromX = width - 2
+						s.cursor.x = 1
+						s.dispzoneChanged = true
+					}
+				}
+
 				s.insertChar(newCharacter(r))
 				s.moveCursor(right)
 			}
