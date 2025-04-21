@@ -42,19 +42,21 @@ func (m mode) String() string {
 type character struct {
 	r rune
 	// true if the character represents Tab.
-	tab       bool
+	tab bool
+	// true if the character represents new line.
 	nl        bool
 	dispWidth int
 	str       string
 }
 
 func newCharacter(r rune) *character {
+	// Raw Tab changes its size dynamically and it's hard to properly display, so
+	// Tab is treated as 4 spaces.
 	if r == '\t' {
-		// Raw Tab changes its size dynamically and it's hard to properly display, so
-		// Tab is treated as 4 spaces.
 		return &character{tab: true, dispWidth: 4, str: "    "}
 	}
 
+	// In turtle newline is rendered as a single space.
 	if r == '\n' {
 		return &character{nl: true, dispWidth: 1, str: " "}
 	}
