@@ -25,9 +25,15 @@ func Test_editor(t *testing.T) {
 		go editor(term, strings.NewReader(content), in)
 
 		for i, tc := range keystrokes {
-			for _, r := range []rune(tc.input) {
-				in.input(string(r))
+			switch tc.input {
+			case "<Esc>":
+				in.inputb([]byte{27})
+			default:
+				for _, r := range []rune(tc.input) {
+					in.input(string(r))
+				}
 			}
+
 			time.Sleep(1 * time.Millisecond) // wait for terminal in another goroutine finishes its work
 
 			got := term.String()
@@ -38,7 +44,9 @@ func Test_editor(t *testing.T) {
 	}
 
 	t.Run("cursor movement", func(t *testing.T) {
+		t.Parallel()
 		t.Run("hjkl basic", func(t *testing.T) {
+			t.Parallel()
 			content := heredoc(`
 				1a1b1c1d1e1f
 				2a2b2c2d2e2f
@@ -478,6 +486,7 @@ func Test_editor(t *testing.T) {
 		})
 
 		t.Run("hjkl with with tab", func(t *testing.T) {
+			t.Parallel()
 			content := heredoc(`
 				1a1b1c1d1e1f
 					2c2d2e2f
@@ -779,6 +788,245 @@ func Test_editor(t *testing.T) {
 			}
 			test(t, 8, 10, content, keystrokes)
 		})
+
+		t.Run("i", func(t *testing.T) {
+			t.Parallel()
+			content := heredoc(`
+				1a1b1c1d1e1f
+					2c2d2e2f
+						3e3f
+				
+						5e5f
+						6e6f
+					7c7d7e7f
+				8a8b8c8d8e8f
+			`)
+
+			keystrokes := []keystroke{
+				{
+					input: "",
+					expected: heredoc(`
+						#a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "i",
+					expected: heredoc(`
+						#a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "test",
+					expected: heredoc(`
+						test#a1b1c
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						test#a1b1c
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "lllllll",
+					expected: heredoc(`
+						st1a1b1c1#
+						  2c2d2e2f
+						      3e3f
+						
+						      5e5f
+						      6e6f
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "lllll",
+					expected: heredoc(`
+						b1c1d1e1f#
+						d2e2f 
+						 3e3f 
+						
+						 5e5f 
+						 6e6f 
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "i",
+					expected: heredoc(`
+						b1c1d1e1f#
+						d2e2f 
+						 3e3f 
+						
+						 5e5f 
+						 6e6f 
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "xyz",
+					expected: heredoc(`
+						1d1e1fxyz#
+						2f 
+						3f 
+						
+						5f 
+						6f 
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "qwerty",
+					expected: heredoc(`
+						xyzqwerty#
+						
+						
+						
+						
+						
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						xyzqwerty#
+						
+						
+						
+						
+						
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						xyzqwerty 
+						#
+						
+						
+						
+						
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "i",
+					expected: heredoc(`
+						xyzqwerty 
+						#
+						
+						
+						
+						
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "abc",
+					expected: heredoc(`
+						d1e1fxyzqw
+						fabc#
+						f 
+						
+						f 
+						f 
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						d1e1fxyzqw
+						fabc#
+						f 
+						
+						f 
+						f 
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "jj",
+					expected: heredoc(`
+						d1e1fxyzqw
+						fabc 
+						f 
+						#
+						f 
+						f 
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "itest",
+					expected: heredoc(`
+						test1a1b1c
+						    2c2d2e
+						        3e
+						test#
+						        5e
+						        6e
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						test1a1b1c
+						    2c2d2e
+						        3e
+						test#
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+			}
+			test(t, 8, 10, content, keystrokes)
+		})
 	})
 }
 
@@ -876,6 +1124,10 @@ func (i *virtstdin) Read(p []byte) (n int, err error) {
 
 func (i *virtstdin) input(s string) (int, error) {
 	return i.w.Write([]byte(s))
+}
+
+func (i *virtstdin) inputb(b []byte) (int, error) {
+	return i.w.Write(b)
 }
 
 func heredoc(raw string) string {
