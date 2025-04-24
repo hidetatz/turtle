@@ -1024,6 +1024,396 @@ func Test_editor(t *testing.T) {
 						
 					`),
 				},
+				{
+					input: "jjj",
+					expected: heredoc(`
+						    2c2d2e
+						        3e
+						test 
+						        5e
+						        6e
+						    #c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "itest",
+					expected: heredoc(`
+						    2c2d2e
+						        3e
+						test 
+						        5e
+						        6e
+						    test#c
+						mode: INS
+						
+					`),
+				},
+			}
+			test(t, 8, 10, content, keystrokes)
+		})
+
+		t.Run("d", func(t *testing.T) {
+			t.Parallel()
+			content := heredoc(`
+				1a1b1c1d1e1f
+					2c2d2e2f
+						3e3f
+				
+						5e5f
+						6e6f
+					7c7d7e7f
+				8a8b8c8d8e8f
+				
+				
+				1a1b1c1d1e1f
+			`)
+
+			keystrokes := []keystroke{
+				{
+					input: "",
+					expected: heredoc(`
+						#a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						#1b1c1d1e1
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						#b1c1d1e1f
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "dddddddddd",
+					expected: heredoc(`
+						#
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						#   2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						    7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						    2c2d2e
+						#       3e
+						 
+						        5e
+						        6e
+						    7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						    2c2d2e
+						#   3e3f 
+						 
+						        5e
+						        6e
+						    7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						    2c2d2e
+						#e3f 
+						 
+						        5e
+						        6e
+						    7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						    2c2d2e
+						3e3f 
+						#
+						        5e
+						        6e
+						    7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						    2c2d2e
+						3e3f 
+						#       5e
+						        6e
+						    7c7d7e
+						8a8b8c8d8e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "jjj",
+					expected: heredoc(`
+						    2c2d2e
+						3e3f 
+						        5e
+						        6e
+						    7c7d7e
+						#a8b8c8d8e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "lllllllllll",
+					expected: heredoc(`
+						  2c2d2e2f
+						3f 
+						      5e5f
+						      6e6f
+						  7c7d7e7f
+						8b8c8d8e8#
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "j",
+					expected: heredoc(`
+						3f 
+						      5e5f
+						      6e6f
+						  7c7d7e7f
+						8b8c8d8e8f
+						#
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						3e3f 
+						        5e
+						        6e
+						    7c7d7e
+						8a8b8c8d8e
+						#
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "d",
+					expected: heredoc(`
+						3e3f 
+						        5e
+						        6e
+						    7c7d7e
+						8a8b8c8d8e
+						#a1b1c1d1e
+						mode: NOR
+						
+					`),
+				},
+			}
+			test(t, 8, 10, content, keystrokes)
+		})
+
+		t.Run("o and O", func(t *testing.T) {
+			t.Parallel()
+			content := heredoc(`
+				1a1b1c1d1e1f
+					2c2d2e2f
+						3e3f
+				
+						5e5f
+						6e6f
+					7c7d7e7f
+				8a8b8c8d8e8f
+			`)
+
+			keystrokes := []keystroke{
+				{
+					input: "",
+					expected: heredoc(`
+						#a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						        6e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "O",
+					expected: heredoc(`
+						#
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						#
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "o",
+					expected: heredoc(`
+						 
+						#
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						 
+						#
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "jjjjj",
+					expected: heredoc(`
+						 
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						#       5e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "o",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						#
+						mode: INS
+						
+					`),
+				},
+				{
+					input: "<Esc>",
+					expected: heredoc(`
+						1a1b1c1d1e
+						    2c2d2e
+						        3e
+						 
+						        5e
+						#
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "jjkkkkk",
+					expected: heredoc(`
+						#       3e
+						 
+						        5e
+						 
+						        6e
+						    7c7d7e
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "O",
+					expected: heredoc(`
+						#
+						        3e
+						 
+						        5e
+						 
+						        6e
+						mode: INS
+						
+					`),
+				},
 			}
 			test(t, 8, 10, content, keystrokes)
 		})
