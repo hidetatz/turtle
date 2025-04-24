@@ -146,7 +146,10 @@ func (l *line) deleteChar(at int) {
 }
 
 func (l *line) cut(from, limit int) string {
-	s := l.String()
+	return cut(l.String(), from, limit)
+}
+
+func cut(s string, from, limit int) string {
 	length := len(s)
 
 	if length < from {
@@ -159,7 +162,7 @@ func (l *line) cut(from, limit int) string {
 		to = length
 	}
 
-	return l.String()[from:to]
+	return s[from:to]
 }
 
 /*
@@ -234,7 +237,8 @@ func (s *screen) synchronize() {
 	// update status line
 	if s.modechanged {
 		s.term.putcursor(0, s.maxRows)
-		fmt.Fprint(s.term, fmt.Sprintf("mode: %v", s.mode))
+		s.term.clearline()
+		fmt.Fprint(s.term, cut(fmt.Sprintf("mode: %v", s.mode), 0, s.maxCols))
 	}
 
 	// update lines
