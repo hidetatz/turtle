@@ -684,10 +684,10 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				curline := s.currentLine()
 				width := curline.width()
 
-				// if the cursor is pointint the place on which no character exists ("too right"),
+				// if the cursor is pointing the place on which no character exists ("too right"),
 				// move cursor to the rightmost character first.
 				if width-1 < s.cursor.x+s.dispFromX {
-					if width == 0 {
+					if width == 1 {
 						s.dispFromX = 0
 						s.cursor.x = 0
 						s.dispzoneChanged = true
