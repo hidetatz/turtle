@@ -32,7 +32,7 @@ func Test_editor(t *testing.T) {
 
 			got := term.String()
 			if got != tc.expected {
-				t.Fatalf("(test %v)\n========== expected ==========\n%v\n==========\n========== got ==========\n%v\n==========", i, tc.expected, got)
+				t.Fatalf("(test %v)\n========== expected ==========\n%v\n==========\n========== got ==========\n%v\n==========", i, strings.ReplaceAll(tc.expected, " ", "\\"), strings.ReplaceAll(got, " ", "\\"))
 			}
 		}
 	}
@@ -183,15 +183,28 @@ func Test_editor(t *testing.T) {
 					`),
 				},
 				{
+					input: "l",
+					expected: heredoc(`
+						b1c1d1e1f#
+						b2c2d2e2f 
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						mode: NOR
+						
+					`),
+				},
+				{
 					// stops at the right edge
 					input: "l",
 					expected: heredoc(`
-						1b1c1d1e1#
-						2b2c2d2e2f
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
+						b1c1d1e1f#
+						b2c2d2e2f 
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
 						mode: NOR
 						
 					`),
@@ -199,12 +212,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						2b2c2d2e2#
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
+						b1c1d1e1f 
+						b2c2d2e2f#
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
 						mode: NOR
 						
 					`),
@@ -212,12 +225,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						2b2c2d2e2f
-						3b3c3d3e3#
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
+						b1c1d1e1f 
+						b2c2d2e2f 
+						b3c3d3e3f#
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
 						mode: NOR
 						
 					`),
@@ -225,12 +238,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						2b2c2d2e2f
-						3b3c3d3e3f
-						4b4c4d4e4#
-						5b5c5d5e5f
-						6b6c6d6e6f
+						b1c1d1e1f 
+						b2c2d2e2f 
+						b3c3d3e3f 
+						b4c4d4e4f#
+						b5c5d5e5f 
+						b6c6d6e6f 
 						mode: NOR
 						
 					`),
@@ -238,12 +251,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						2b2c2d2e2f
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5#
-						6b6c6d6e6f
+						b1c1d1e1f 
+						b2c2d2e2f 
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f#
+						b6c6d6e6f 
 						mode: NOR
 						
 					`),
@@ -251,12 +264,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						2b2c2d2e2f
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6#
+						b1c1d1e1f 
+						b2c2d2e2f 
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f#
 						mode: NOR
 						
 					`),
@@ -265,12 +278,12 @@ func Test_editor(t *testing.T) {
 					// down scroll
 					input: "j",
 					expected: heredoc(`
-						2b2c2d2e2f
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
-						7b7c7d7e7#
+						b2c2d2e2f 
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f#
 						mode: NOR
 						
 					`),
@@ -278,12 +291,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
-						7b7c7d7e7f
-						8b8c8d8e8#
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8d8e8f#
 						mode: NOR
 						
 					`),
@@ -292,12 +305,12 @@ func Test_editor(t *testing.T) {
 					// stops at the bottom line
 					input: "j",
 					expected: heredoc(`
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
-						7b7c7d7e7f
-						8b8c8d8e8#
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8d8e8f#
 						mode: NOR
 						
 					`),
@@ -305,12 +318,25 @@ func Test_editor(t *testing.T) {
 				{
 					input: "h",
 					expected: heredoc(`
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
-						7b7c7d7e7f
-						8b8c8d8e#f
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8d8e8# 
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
+					expected: heredoc(`
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8d8e#f 
 						mode: NOR
 						
 					`),
@@ -318,12 +344,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "hhh",
 					expected: heredoc(`
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5d5e5f
-						6b6c6d6e6f
-						7b7c7d7e7f
-						8b8c8#8e8f
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8#8e8f 
 						mode: NOR
 						
 					`),
@@ -331,18 +357,31 @@ func Test_editor(t *testing.T) {
 				{
 					input: "kkk",
 					expected: heredoc(`
-						3b3c3d3e3f
-						4b4c4d4e4f
-						5b5c5#5e5f
-						6b6c6d6e6f
-						7b7c7d7e7f
-						8b8c8d8e8f
+						b3c3d3e3f 
+						b4c4d4e4f 
+						b5c5#5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8d8e8f 
 						mode: NOR
 						
 					`),
 				},
 				{
-					input: "hhhhh",
+					input: "hhhh",
+					expected: heredoc(`
+						b3c3d3e3f 
+						b4c4d4e4f 
+						#5c5d5e5f 
+						b6c6d6e6f 
+						b7c7d7e7f 
+						b8c8d8e8f 
+						mode: NOR
+						
+					`),
+				},
+				{
+					input: "h",
 					expected: heredoc(`
 						3b3c3d3e3f
 						4b4c4d4e4f
@@ -457,7 +496,7 @@ func Test_editor(t *testing.T) {
 						#a1b1c1d1e
 						    2c2d2e
 						        3e
-						
+						 
 						        5e
 						        6e
 						mode: NOR
@@ -470,7 +509,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						#   2c2d2e
 						        3e
-						
+						 
 						        5e
 						        6e
 						mode: NOR
@@ -483,7 +522,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						    #c2d2e
 						        3e
-						
+						 
 						        5e
 						        6e
 						mode: NOR
@@ -496,7 +535,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						#   2c2d2e
 						        3e
-						
+						 
 						        5e
 						        6e
 						mode: NOR
@@ -509,7 +548,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						    2c2d2e
 						#       3e
-						
+						 
 						        5e
 						        6e
 						mode: NOR
@@ -561,7 +600,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						    2c2d2e
 						        3e
-						
+						 
 						#       5e
 						        6e
 						mode: NOR
@@ -574,7 +613,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						    2c2d2e
 						        3e
-						
+						 
 						    #   5e
 						        6e
 						mode: NOR
@@ -587,7 +626,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						    2c2d2e
 						        3e
-						
+						 
 						        #e
 						        6e
 						mode: NOR
@@ -600,7 +639,7 @@ func Test_editor(t *testing.T) {
 						1a1b1c1d1e
 						    2c2d2e
 						        3e
-						
+						 
 						        5#
 						        6e
 						mode: NOR
@@ -636,12 +675,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "l",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f 
 						
-						      5e5#
-						      6e6f
+						     5e5f#
+						     6e6f 
 						mode: NOR
 						
 					`),
@@ -649,12 +688,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "k",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f 
 						#
-						      5e5f
-						      6e6f
+						     5e5f 
+						     6e6f 
 						mode: NOR
 						
 					`),
@@ -662,12 +701,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "k",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3#
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f#
 						
-						      5e5f
-						      6e6f
+						     5e5f 
+						     6e6f 
 						mode: NOR
 						
 					`),
@@ -675,12 +714,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "hh",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3#3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e#f 
 						
-						      5e5f
-						      6e6f
+						     5e5f 
+						     6e6f 
 						mode: NOR
 						
 					`),
@@ -688,12 +727,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f 
 						#
-						      5e5f
-						      6e6f
+						     5e5f 
+						     6e6f 
 						mode: NOR
 						
 					`),
@@ -701,12 +740,12 @@ func Test_editor(t *testing.T) {
 				{
 					input: "j",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f 
 						
-						      5#5f
-						      6e6f
+						     5e#f 
+						     6e6f 
 						mode: NOR
 						
 					`),
@@ -714,25 +753,25 @@ func Test_editor(t *testing.T) {
 				{
 					input: "h",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f 
 						
-						      #e5f
-						      6e6f
+						     5#5f 
+						     6e6f 
 						mode: NOR
 						
 					`),
 				},
 				{
-					input: "h",
+					input: "hh",
 					expected: heredoc(`
-						1b1c1d1e1f
-						  2c2d2e2f
-						      3e3f
+						b1c1d1e1f 
+						 2c2d2e2f 
+						     3e3f 
 						
-						  #   5e5f
-						      6e6f
+						 #   5e5f 
+						     6e6f 
 						mode: NOR
 						
 					`),
