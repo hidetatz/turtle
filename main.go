@@ -68,6 +68,10 @@ func newCharacter(r rune) *character {
 	return &character{r: r, dispWidth: 1, str: string(r)}
 }
 
+func (c *character) copy() *character {
+	return &character{c.r, c.tab, c.nl, c.dispWidth, c.str}
+}
+
 func (c *character) String() string {
 	return c.str
 }
@@ -135,6 +139,14 @@ func (l *line) widthTo(idx int) int {
 		x += l.buffer[i].dispWidth
 	}
 	return x
+}
+
+func (l *line) copy() *line {
+	copy := &line{buffer: make([]*character, len(l.buffer))}
+	for i := range l.buffer {
+		copy.buffer[i] = l.buffer[i].copy()
+	}
+	return copy
 }
 
 func (l *line) insertChar(c *character, at int) {
@@ -244,11 +256,13 @@ func (s *screen) synchronize() {
 	// update lines
 	if s.dispzoneChanged {
 		// when topline is changed, all shown lines must be updated
-		for i := 0; i < min(len(s.lines), s.maxRows); i++ {
+		for i := 0; i < s.maxRows; i++ {
 			s.term.putcursor(0, i)
 			s.term.clearline()
-			line := s.lines[s.dispFromY+i]
-			fmt.Fprint(s.term, line.cut(s.dispFromX, s.maxCols))
+			if s.dispFromY+i < len(s.lines) {
+				line := s.lines[s.dispFromY+i]
+				fmt.Fprint(s.term, line.cut(s.dispFromX, s.maxCols))
+			}
 		}
 	} else if len(s.changedlines) != 0 {
 		// when topline is not changed but some lines are changed, change only them
@@ -475,6 +489,88 @@ func (s *screen) deleteLine(y int) {
 	s.lines = slices.Delete(s.lines, y, y+1)
 }
 
+func (s *screen) moveXToRightEdgeCharIfNecessary() bool {
+	curline := s.currentLine()
+	width := curline.width()
+
+	// if the cursor is pointing the place on which no character exists ("too right"),
+	// move cursor to the rightmost character first.
+	if width-1 < s.cursor.x+s.dispFromX {
+		if width == 1 {
+			s.dispFromX = 0
+			s.cursor.x = 0
+			s.dispzoneChanged = true
+		} else if 0 < width-s.dispFromX {
+			s.cursor.x = width - s.dispFromX - 1
+		} else {
+			// show right edge character for useful
+			s.dispFromX = width - 2
+			s.cursor.x = 1
+			s.dispzoneChanged = true
+		}
+		return true
+	}
+
+	return false
+}
+
+// from, to both inclusive
+func (s *screen) joinLines(from, to int) int {
+	if to < from {
+		from, to = to, from
+	}
+
+	if from <= 0 {
+		from = 0
+	} else if len(s.lines)-1 < from {
+		from = len(s.lines)
+	}
+
+	if to <= 0 {
+		to = 0
+	} else if len(s.lines)-1 < to {
+		to = len(s.lines)
+	}
+
+	if from == to {
+		return from
+	}
+
+	base := s.lines[from]
+	base.deleteChar(len(base.buffer) - 1) // delete \n
+
+	for i := from + 1; i <= to; i++ {
+		l := s.lines[i]
+		l.deleteChar(len(l.buffer) - 1)
+		base.buffer = append(base.buffer, l.buffer...)
+	}
+
+	base.buffer = append(base.buffer, newCharacter('\n')) // restore deleted \n
+
+	for i := from + 1; i <= to; i++ {
+		s.deleteLine(i)
+	}
+
+	for i := from; i < len(s.lines); i++ {
+		s.changedlines = append(s.changedlines, i)
+	}
+
+	return from
+}
+
+func (s *screen) calcx(idx int) int {
+	curline := s.currentLine()
+	x := 0
+	for i := 0; i < idx; i++ {
+		x += curline.buffer[i].dispWidth
+	}
+	if x < s.dispFromX {
+		return 0
+	}
+
+	return x - s.dispFromX
+}
+
 func (s *screen) debug() {
 	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v}, lines_count: %v, curlinelength: %v, curlinewidth: %v, dispFromX: %v, dispFromY: %v\n", s.maxRows, s.maxCols, s.mode, s.cursor.x, s.cursor.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.dispFromX, s.dispFromY)
 }
@@ -594,46 +690,17 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(insert)
 
 			case r == 'd':
+				s.moveXToRightEdgeCharIfNecessary()
 				curline := s.currentLine()
-				width := curline.width()
+				curidx := curline.indexByCursor(s.cursor.x, s.dispFromX)
+				removingNL := curidx == curline.length()-1
 
-				// if the cursor is pointint the place on which no character exists ("too right"),
-				// move cursor to the rightmost character first.
-				if width-1 < s.cursor.x+s.dispFromX {
-					if width == 1 {
-						s.dispFromX = 0
-						s.cursor.x = 0
-						s.dispzoneChanged = true
-					} else if 0 < width-s.dispFromX {
-						s.cursor.x = width - s.dispFromX - 1
-					} else {
-						// show right edge character for useful
-						s.dispFromX = width - 2
-						s.cursor.x = 1
-						s.dispzoneChanged = true
-					}
-				}
-
-				removingNL := curline.indexByCursor(s.cursor.x, s.dispFromX) == curline.length()-1
-
-				if removingNL && s.cursor.y == len(s.lines)-1 {
-					// todo: this should just remove the nl
-					continue
-				}
-
-				s.deleteCurrentChar()
 				if removingNL {
 					// if nl is removed, concat current and next line.
-
-					// if nl at the last line is removed, just remove the line.
-					if s.cursor.y == len(s.lines)-1 && curline.length() == 0 {
-						s.deleteCurrentLine()
-					} else {
-						newline := &line{buffer: slices.Concat(curline.buffer, s.lines[s.cursor.y+1].buffer)}
-						s.deleteLine(s.cursor.y + 1)
-						s.lines[s.cursor.y] = newline
-						s.changedlines = append(s.changedlines, s.cursor.y)
-					}
+					s.joinLines(s.cursor.y, s.cursor.y+1)
+				} else {
+					s.deleteCurrentChar()
+					s.cursor.x = s.calcx(curidx)
 				}
 
 			case r == 'o':
@@ -675,32 +742,66 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			case isArrowKey && dir == right:
 				s.moveCursor(right)
 
+			case r == 13: // Enter
+				s.moveXToRightEdgeCharIfNecessary()
+
+				curline := s.currentLine()
+				copy := curline.copy()
+				curidx := curline.indexByCursor(s.cursor.x, s.dispFromX)
+
+				// cut current line
+				s.lines[s.cursor.y].buffer = append(curline.buffer[:curidx], newCharacter('\n'))
+
+				// insert line below
+				s.insertline(down)
+				s.lines[s.cursor.y+1].buffer = copy.buffer[curidx:]
+				s.moveCursor(down)
+				s.cursor.x = 0
+				if s.dispFromX != 0 {
+					s.dispFromX = 0
+					s.dispzoneChanged = true
+				}
+
+			case r == 127: // Backspace
+				s.moveXToRightEdgeCharIfNecessary()
+
+				curline := s.currentLine()
+				curidx := curline.indexByCursor(s.cursor.x, s.dispFromX)
+
+				switch {
+				case curidx == 0 && s.cursor.y == 0:
+					// already at the top. do nothing
+
+				case curidx == 0:
+					abovelinelen := s.lines[s.cursor.y-1].length()
+					s.joinLines(s.cursor.y, s.cursor.y-1)
+					s.moveCursor(up)
+					s.cursor.x = s.calcx(abovelinelen - 1)
+					if s.maxCols-1 < s.cursor.x {
+						s.dispFromX = s.cursor.x - s.maxCols/2
+						s.cursor.x = s.cursor.x - s.dispFromX
+						s.dispzoneChanged = true
+					}
+
+				default:
+					// delete the char
+					curline.deleteChar(curidx - 1)
+					s.cursor.x = s.calcx(curidx - 1)
+					if s.cursor.x == 0 && s.dispFromX != 0 {
+						s.dispFromX--
+						s.cursor.x = 1
+						s.dispzoneChanged = true
+					}
+					s.changedlines = append(s.changedlines, s.cursor.y)
+				}
+
 			case unicode.IsControl(r):
 				if _debug {
 					debug("control key is pressed: %v\n", r)
 				}
 
 			default:
-				curline := s.currentLine()
-				width := curline.width()
-
-				// if the cursor is pointing the place on which no character exists ("too right"),
-				// move cursor to the rightmost character first.
-				if width-1 < s.cursor.x+s.dispFromX {
-					if width == 1 {
-						s.dispFromX = 0
-						s.cursor.x = 0
-						s.dispzoneChanged = true
-					} else if 0 < width-s.dispFromX {
-						s.cursor.x = width - s.dispFromX - 1
-					} else {
-						// show right edge character for useful
-						s.dispFromX = width - 2
-						s.cursor.x = 1
-						s.dispzoneChanged = true
-					}
-				}
-
+				s.moveXToRightEdgeCharIfNecessary()
 				s.insertChar(newCharacter(r))
 				s.moveCursor(right)
 			}
