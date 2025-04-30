@@ -116,7 +116,7 @@ func (l *line) charidx(cursor, offset int) int {
 		}
 	}
 
-	panic("should not come here")
+	panic("must not happen")
 }
 
 func (l *line) length() int {
@@ -189,6 +189,7 @@ type screen struct {
 	lines           []*line
 	x               int // x cursor based on term screen
 	y               int // y cursor based on buffer
+	actualx         int
 	xoffset         int
 	yoffset         int
 	modechanged     bool
@@ -205,27 +206,32 @@ func (s *screen) currentLine() *line {
 	return s.lines[s.y]
 }
 
-func (s *screen) synchronize() {
-	// calculate cursor position first.
-	// this need to be here because it can change screen state internally.
+func (s *screen) render() {
 	curline := s.currentLine()
+	width := curline.width()
 
 	x := s.x
-	lim := curline.width() - s.xoffset
-	if lim <= 0 {
-		x = 0
-	} else if lim-1 < x {
-		x = lim - 1
-	} else {
-		// move to the head of the character. this works if the character width is bigger than 1.
-		curidx := curline.charidx(s.x, s.xoffset)
-		widthToCurChar := curline.widthto(curidx)
-		x = widthToCurChar - s.xoffset
-		if x < 0 {
-			s.xoffset -= -s.x
-			s.dispzoneChanged = true
-			x = 0
-		}
+
+	// when the line is too short to be shown, scroll left
+	if width-1 < s.xoffset {
+		delta := s.xoffset - (width - 1)
+		s.xoffset -= delta
+		s.dispzoneChanged = true
+	}
+
+	// when the x is too right, set x to the line tail
+	if (width-1)-s.xoffset < s.x {
+		x = (width - 1) - s.xoffset
+	}
+
+	// move to the head of the character. this works if the character width is bigger than 1.
+	curidx := curline.charidx(x, s.xoffset)
+	x = curline.widthto(curidx) - s.xoffset
+	if x < 0 {
+		delta := -x
+		s.xoffset -= delta
+		x += delta
+		s.dispzoneChanged = true
 	}
 
 	// update status line
@@ -275,6 +281,7 @@ func (s *screen) synchronize() {
 
 	// move cursor after all.
 	s.term.putcursor(x, s.y-s.yoffset)
+	s.actualx = x
 
 	s.modechanged = false
 	s.dispzoneChanged = false
@@ -291,118 +298,55 @@ const (
 )
 
 func (s *screen) movecursor(direction direction, cnt int) {
+	/*
+	 * move x/y
+	 */
 	switch direction {
 	case up:
-		if s.y == 0 {
-			return
-		}
-
-		s.y -= cnt
+		s.y = max(s.y-cnt, 0)
 
 	case down:
-		if s.y == len(s.lines)-1 {
-			return
-		}
-
-		s.y += cnt
+		s.y = min(s.y+cnt, len(s.lines)-1)
 
 	case left:
-		/*
-		 * move the cursor to the left character and scroll accordingly.
-		 */
-
+		s.x = s.actualx
 		curline := s.currentLine()
-
-		// special case: the cursor can point the place on which no character exists.
-		// this happens if cursor moved up/down to not shown line as it's too short.
-		// move the cursor to the last character.
-		if curline.width()-1 < s.x+s.xoffset {
-			// if empty line, move to the leftmost.
-			if curline.length() == 0 {
-				s.xoffset = 0
-				s.dispzoneChanged = true
-				s.x = 0
-				return
-			}
-
-			// if the most right character is not shown, move to it.
-			if curline.width()-1 < s.xoffset {
-				widthToLastchar := curline.widthto(curline.length() - 1)
-				s.xoffset = widthToLastchar
-				s.dispzoneChanged = true
-				s.x = 0
-				return
-			}
-
-			// else, regard currently it's on the last character.
-			s.x = curline.width() - 1 - s.xoffset
-			// then move to left character in the below code.
-		}
-
-		// usual case
-
-		curidx := curline.charidx(s.x, s.xoffset)
-
-		// if currently on the leftmost character, do not move.
-		if curidx == 0 {
-			if s.xoffset != 0 {
-				s.xoffset = 0
-				s.dispzoneChanged = true
-				s.x = 0
-			}
-			return
-		}
-
-		// move to the left character.
-		widthToLeftChar := curline.widthto(curidx - 1)
-		s.x = widthToLeftChar - s.xoffset
-
-		// if x is less than 0, do scroll.
-		if s.x < 0 {
-			s.xoffset -= -s.x
-			s.dispzoneChanged = true
-			s.x = 0
-		}
+		curidx := s.curCharIdxX()
+		delta := curline.widthto(curidx) - curline.widthto(max(curidx-cnt, 0))
+		s.x -= delta
 
 	case right:
-		/*
-		 * move the cursor to the right character and scroll accordingly.
-		 */
-
+		s.x = s.actualx
 		curline := s.currentLine()
-
-		// special case: the cursor can point the place on which no character exists.
-		// this happens if cursor moved up/down to not shown line as it's too short.
-		// do nothing.
-		if curline.width()-1 < s.x+s.xoffset {
-			return
-		}
-
-		// usual case
-
-		curidx := curline.charidx(s.x, s.xoffset)
-
-		// if currently on the rightmost character, do not move.
-		if curidx == curline.length()-1 {
-			return
-		}
-
-		// move to the right character.
-		widthToRightChar := curline.widthto(curidx + 1)
-		s.x = widthToRightChar - s.xoffset
-
-		// if x is bigger than screen width, do scroll.
-		if s.width-1 < s.x {
-			s.xoffset += s.x - (s.width - 1)
-			s.dispzoneChanged = true
-			s.x = s.width - 1
-		}
+		curidx := s.curCharIdxX()
+		delta := curline.widthto(min(curidx+cnt, curline.length()-1)) - curline.widthto(curidx)
+		s.x += delta
 
 	default:
 		panic("invalid direction is passed")
 	}
 
-	// do vertical scroll if needed
+	/*
+	 * horizontal scroll
+	 */
+
+	switch {
+	case s.x < 0:
+		delta := -s.x
+		s.xoffset -= delta
+		s.x += delta
+		s.dispzoneChanged = true
+
+	case s.width-1 < s.x:
+		delta := s.x - (s.width - 1)
+		s.xoffset += delta
+		s.x -= delta
+		s.dispzoneChanged = true
+	}
+
+	/*
+	 * vertical scroll
+	 */
 	switch {
 	case s.y < s.yoffset:
 		// scroll up
@@ -547,7 +491,7 @@ func (s *screen) calcx(idx int) int {
 }
 
 func (s *screen) debug() {
-	debug("height: %v, width: %v, mode: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n", s.height, s.width, s.mode, s.x, s.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
+	debug("height: %v, width: %v, mode: %v, x: %v, y: %v, actualx: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n", s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
@@ -629,7 +573,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		s.lines = []*line{newemptyline()}
 	}
 
-	s.synchronize()
+	s.render()
 
 	/*
 	 * start editor main routine
@@ -786,7 +730,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			panic("unknown mode")
 		}
 
-		s.synchronize()
+		s.render()
 
 		if _debug {
 			s.debug()
