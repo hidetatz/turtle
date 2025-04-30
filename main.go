@@ -181,10 +181,6 @@ func cut(s string, from, limit int) string {
  * screen
  */
 
-type cursorpos struct {
-	x, y int
-}
-
 type screen struct {
 	term terminal
 
@@ -200,7 +196,8 @@ type screen struct {
 	// file  *os.File
 
 	// cursor position based on the character
-	cursor *cursorpos
+	x int
+	y int
 
 	// the index indicating the upper left corner of the rectangle that is
 	// cut from the text and actually displayed in the terminal.
@@ -220,7 +217,7 @@ func (s *screen) changeMode(mode mode) {
 }
 
 func (s *screen) currentLine() *line {
-	return s.lines[s.cursor.y]
+	return s.lines[s.y]
 }
 
 func (s *screen) synchronize() {
@@ -228,7 +225,7 @@ func (s *screen) synchronize() {
 	// this need to be here because it can change screen state internally.
 	curline := s.currentLine()
 
-	x := s.cursor.x
+	x := s.x
 	lim := curline.width() - s.xoffset
 	if lim <= 0 {
 		x = 0
@@ -236,11 +233,11 @@ func (s *screen) synchronize() {
 		x = lim - 1
 	} else {
 		// move to the head of the character. this works if the character width is bigger than 1.
-		curidx := curline.indexByCursor(s.cursor.x, s.xoffset)
+		curidx := curline.indexByCursor(s.x, s.xoffset)
 		widthToCurChar := curline.widthTo(curidx)
 		x = widthToCurChar - s.xoffset
 		if x < 0 {
-			s.xoffset -= -s.cursor.x
+			s.xoffset -= -s.x
 			s.dispzoneChanged = true
 			x = 0
 		}
@@ -292,7 +289,7 @@ func (s *screen) synchronize() {
 	}
 
 	// move cursor after all.
-	s.term.putcursor(x, s.cursor.y-s.yoffset)
+	s.term.putcursor(x, s.y-s.yoffset)
 
 	s.modechanged = false
 	s.dispzoneChanged = false
@@ -312,38 +309,38 @@ func (s *screen) moveCursor(direction direction) {
 	switch direction {
 	case up:
 		switch {
-		case s.cursor.y == 0 && s.yoffset == 0:
+		case s.y == 0 && s.yoffset == 0:
 			// when cursor is on the top and the first line is shown at the top,
 			// do nothing.
 			return
 
-		case s.cursor.y-s.yoffset == 0 && 0 < s.yoffset:
+		case s.y-s.yoffset == 0 && 0 < s.yoffset:
 			// when cursor is on the top but still upper line exists,
 			// scroll 1 line up but the cursor itself does not move.
-			s.cursor.y--
+			s.y--
 			s.yoffset--
 			s.dispzoneChanged = true
 
 		default:
 			// just move the cursor itself
-			s.cursor.y--
+			s.y--
 		}
 
 	case down:
 		switch {
-		case s.cursor.y == len(s.lines)-1:
+		case s.y == len(s.lines)-1:
 			// when there are no more lines, do nothing.
 			return
 
-		case s.cursor.y-s.yoffset == s.width-1 && s.cursor.y < len(s.lines)-1:
+		case s.y-s.yoffset == s.width-1 && s.y < len(s.lines)-1:
 			// when cursor is at the bottom but lines still exist, scroll down.
-			s.cursor.y++
+			s.y++
 			s.yoffset++
 			s.dispzoneChanged = true
 
 		default:
 			// just move the cursor itself
-			s.cursor.y++
+			s.y++
 		}
 
 	case left:
@@ -356,12 +353,12 @@ func (s *screen) moveCursor(direction direction) {
 		// special case: the cursor can point the place on which no character exists.
 		// this happens if cursor moved up/down to not shown line as it's too short.
 		// move the cursor to the last character.
-		if curline.width()-1 < s.cursor.x+s.xoffset {
+		if curline.width()-1 < s.x+s.xoffset {
 			// if empty line, move to the leftmost.
 			if curline.length() == 0 {
 				s.xoffset = 0
 				s.dispzoneChanged = true
-				s.cursor.x = 0
+				s.x = 0
 				return
 			}
 
@@ -370,38 +367,38 @@ func (s *screen) moveCursor(direction direction) {
 				widthToLastchar := curline.widthTo(curline.length() - 1)
 				s.xoffset = widthToLastchar
 				s.dispzoneChanged = true
-				s.cursor.x = 0
+				s.x = 0
 				return
 			}
 
 			// else, regard currently it's on the last character.
-			s.cursor.x = curline.width() - 1 - s.xoffset
+			s.x = curline.width() - 1 - s.xoffset
 			// then move to left character in the below code.
 		}
 
 		// usual case
 
-		curidx := curline.indexByCursor(s.cursor.x, s.xoffset)
+		curidx := curline.indexByCursor(s.x, s.xoffset)
 
 		// if currently on the leftmost character, do not move.
 		if curidx == 0 {
 			if s.xoffset != 0 {
 				s.xoffset = 0
 				s.dispzoneChanged = true
-				s.cursor.x = 0
+				s.x = 0
 			}
 			return
 		}
 
 		// move to the left character.
 		widthToLeftChar := curline.widthTo(curidx - 1)
-		s.cursor.x = widthToLeftChar - s.xoffset
+		s.x = widthToLeftChar - s.xoffset
 
 		// if x is less than 0, do scroll.
-		if s.cursor.x < 0 {
-			s.xoffset -= -s.cursor.x
+		if s.x < 0 {
+			s.xoffset -= -s.x
 			s.dispzoneChanged = true
-			s.cursor.x = 0
+			s.x = 0
 		}
 
 	case right:
@@ -414,13 +411,13 @@ func (s *screen) moveCursor(direction direction) {
 		// special case: the cursor can point the place on which no character exists.
 		// this happens if cursor moved up/down to not shown line as it's too short.
 		// do nothing.
-		if curline.width()-1 < s.cursor.x+s.xoffset {
+		if curline.width()-1 < s.x+s.xoffset {
 			return
 		}
 
 		// usual case
 
-		curidx := curline.indexByCursor(s.cursor.x, s.xoffset)
+		curidx := curline.indexByCursor(s.x, s.xoffset)
 
 		// if currently on the rightmost character, do not move.
 		if curidx == curline.length()-1 {
@@ -429,13 +426,13 @@ func (s *screen) moveCursor(direction direction) {
 
 		// move to the right character.
 		widthToRightChar := curline.widthTo(curidx + 1)
-		s.cursor.x = widthToRightChar - s.xoffset
+		s.x = widthToRightChar - s.xoffset
 
 		// if x is bigger than screen width, do scroll.
-		if s.height-1 < s.cursor.x {
-			s.xoffset += s.cursor.x - (s.height - 1)
+		if s.height-1 < s.x {
+			s.xoffset += s.x - (s.height - 1)
 			s.dispzoneChanged = true
-			s.cursor.x = s.height - 1
+			s.x = s.height - 1
 		}
 
 	default:
@@ -446,14 +443,14 @@ func (s *screen) moveCursor(direction direction) {
 func (s *screen) insertline(direction direction) {
 	switch direction {
 	case up:
-		s.lines = slices.Insert(s.lines, s.cursor.y, emptyline())
+		s.lines = slices.Insert(s.lines, s.y, emptyline())
 	case down:
-		s.lines = slices.Insert(s.lines, s.cursor.y+1, emptyline())
+		s.lines = slices.Insert(s.lines, s.y+1, emptyline())
 	default:
 		panic("invalid direction is passed to addline")
 	}
 
-	for i := s.cursor.y; i < len(s.lines); i++ {
+	for i := s.y; i < len(s.lines); i++ {
 		s.changedlines = append(s.changedlines, i)
 	}
 }
@@ -466,20 +463,20 @@ func (s *screen) insertChar(c *character) {
 		idx = s.curCharIdxX()
 	}
 	s.currentLine().insertChar(c, idx)
-	s.changedlines = append(s.changedlines, s.cursor.y)
+	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) deleteCurrentChar() {
 	s.currentLine().deleteChar(s.curCharIdxX())
-	s.changedlines = append(s.changedlines, s.cursor.y)
+	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) curCharIdxX() int {
-	return s.currentLine().indexByCursor(s.cursor.x, s.xoffset)
+	return s.currentLine().indexByCursor(s.x, s.xoffset)
 }
 
 func (s *screen) deleteCurrentLine() {
-	s.deleteLine(s.cursor.y)
+	s.deleteLine(s.y)
 }
 
 func (s *screen) deleteLine(y int) {
@@ -495,17 +492,17 @@ func (s *screen) moveXToRightEdgeCharIfNecessary() bool {
 
 	// if the cursor is pointing the place on which no character exists ("too right"),
 	// move cursor to the rightmost character first.
-	if width-1 < s.cursor.x+s.xoffset {
+	if width-1 < s.x+s.xoffset {
 		if width == 1 {
 			s.xoffset = 0
-			s.cursor.x = 0
+			s.x = 0
 			s.dispzoneChanged = true
 		} else if 0 < width-s.xoffset {
-			s.cursor.x = width - s.xoffset - 1
+			s.x = width - s.xoffset - 1
 		} else {
 			// show right edge character for useful
 			s.xoffset = width - 2
-			s.cursor.x = 1
+			s.x = 1
 			s.dispzoneChanged = true
 		}
 		return true
@@ -572,7 +569,7 @@ func (s *screen) calcx(idx int) int {
 }
 
 func (s *screen) debug() {
-	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v}, lines_count: %v, curlinelength: %v, curlinewidth: %v, dispFromX: %v, dispFromY: %v\n", s.width, s.height, s.mode, s.cursor.x, s.cursor.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
+	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v}, lines_count: %v, curlinelength: %v, curlinewidth: %v, dispFromX: %v, dispFromY: %v\n", s.width, s.height, s.mode, s.x, s.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
@@ -635,7 +632,8 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		width:           row - 2,
 		height:          col,
 		mode:            normal,
-		cursor:          &cursorpos{x: 0, y: 0},
+		x:               0,
+		y:               0,
 		xoffset:         0,
 		yoffset:         0,
 		modechanged:     true,
@@ -692,15 +690,15 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			case r == 'd':
 				s.moveXToRightEdgeCharIfNecessary()
 				curline := s.currentLine()
-				curidx := curline.indexByCursor(s.cursor.x, s.xoffset)
+				curidx := curline.indexByCursor(s.x, s.xoffset)
 				removingNL := curidx == curline.length()-1
 
 				if removingNL {
 					// if nl is removed, concat current and next line.
-					s.joinLines(s.cursor.y, s.cursor.y+1)
+					s.joinLines(s.y, s.y+1)
 				} else {
 					s.deleteCurrentChar()
-					s.cursor.x = s.calcx(curidx)
+					s.x = s.calcx(curidx)
 				}
 
 			case r == 'o':
@@ -747,16 +745,16 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 				curline := s.currentLine()
 				copy := curline.copy()
-				curidx := curline.indexByCursor(s.cursor.x, s.xoffset)
+				curidx := curline.indexByCursor(s.x, s.xoffset)
 
 				// cut current line
-				s.lines[s.cursor.y].buffer = append(curline.buffer[:curidx], newCharacter('\n'))
+				s.lines[s.y].buffer = append(curline.buffer[:curidx], newCharacter('\n'))
 
 				// insert line below
 				s.insertline(down)
-				s.lines[s.cursor.y+1].buffer = copy.buffer[curidx:]
+				s.lines[s.y+1].buffer = copy.buffer[curidx:]
 				s.moveCursor(down)
-				s.cursor.x = 0
+				s.x = 0
 				if s.xoffset != 0 {
 					s.xoffset = 0
 					s.dispzoneChanged = true
@@ -766,33 +764,33 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.moveXToRightEdgeCharIfNecessary()
 
 				curline := s.currentLine()
-				curidx := curline.indexByCursor(s.cursor.x, s.xoffset)
+				curidx := curline.indexByCursor(s.x, s.xoffset)
 
 				switch {
-				case curidx == 0 && s.cursor.y == 0:
+				case curidx == 0 && s.y == 0:
 					// already at the top. do nothing
 
 				case curidx == 0:
-					abovelinelen := s.lines[s.cursor.y-1].length()
-					s.joinLines(s.cursor.y, s.cursor.y-1)
+					abovelinelen := s.lines[s.y-1].length()
+					s.joinLines(s.y, s.y-1)
 					s.moveCursor(up)
-					s.cursor.x = s.calcx(abovelinelen - 1)
-					if s.height-1 < s.cursor.x {
-						s.xoffset = s.cursor.x - s.height/2
-						s.cursor.x = s.cursor.x - s.xoffset
+					s.x = s.calcx(abovelinelen - 1)
+					if s.height-1 < s.x {
+						s.xoffset = s.x - s.height/2
+						s.x = s.x - s.xoffset
 						s.dispzoneChanged = true
 					}
 
 				default:
 					// delete the char
 					curline.deleteChar(curidx - 1)
-					s.cursor.x = s.calcx(curidx - 1)
-					if s.cursor.x == 0 && s.xoffset != 0 {
+					s.x = s.calcx(curidx - 1)
+					if s.x == 0 && s.xoffset != 0 {
 						s.xoffset--
-						s.cursor.x = 1
+						s.x = 1
 						s.dispzoneChanged = true
 					}
-					s.changedlines = append(s.changedlines, s.cursor.y)
+					s.changedlines = append(s.changedlines, s.y)
 				}
 
 			case unicode.IsControl(r):
