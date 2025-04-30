@@ -848,6 +848,10 @@ func debug(format string, a ...any) (int, error) {
 	return fmt.Fprintf(os.Stderr, format, a...)
 }
 
+/*
+ * terminal
+ */
+
 func ctrl(input byte) rune {
 	return rune(input & 0x1f)
 }
