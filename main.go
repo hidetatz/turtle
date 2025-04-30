@@ -290,21 +290,21 @@ const (
 	right
 )
 
-func (s *screen) movecursor(direction direction) {
+func (s *screen) movecursor(direction direction, cnt int) {
 	switch direction {
 	case up:
 		if s.y == 0 {
 			return
 		}
 
-		s.y--
+		s.y -= cnt
 
 	case down:
 		if s.y == len(s.lines)-1 {
 			return
 		}
 
-		s.y++
+		s.y += cnt
 
 	case left:
 		/*
@@ -681,7 +681,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			case r == 'o':
 				s.insertline(down)
-				s.movecursor(down)
+				s.movecursor(down, 1)
 				s.changeMode(insert)
 
 			case r == 'O':
@@ -689,16 +689,16 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(insert)
 
 			case r == 'h', isArrowKey && dir == left:
-				s.movecursor(left)
+				s.movecursor(left, 1)
 
 			case r == 'j', isArrowKey && dir == down:
-				s.movecursor(down)
+				s.movecursor(down, 1)
 
 			case r == 'k', isArrowKey && dir == up:
-				s.movecursor(up)
+				s.movecursor(up, 1)
 
 			case r == 'l', isArrowKey && dir == right:
-				s.movecursor(right)
+				s.movecursor(right, 1)
 			}
 
 		case insert:
@@ -707,16 +707,16 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(normal)
 
 			case isArrowKey && dir == left:
-				s.movecursor(left)
+				s.movecursor(left, 1)
 
 			case isArrowKey && dir == down:
-				s.movecursor(down)
+				s.movecursor(down, 1)
 
 			case isArrowKey && dir == up:
-				s.movecursor(up)
+				s.movecursor(up, 1)
 
 			case isArrowKey && dir == right:
-				s.movecursor(right)
+				s.movecursor(right, 1)
 
 			case r == 13: // Enter
 				s.moveXToRightEdgeCharIfNecessary()
@@ -731,7 +731,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				// insert line below
 				s.insertline(down)
 				s.lines[s.y+1].buffer = copy.buffer[curidx:]
-				s.movecursor(down)
+				s.movecursor(down, 1)
 				s.x = 0
 				if s.xoffset != 0 {
 					s.xoffset = 0
@@ -751,7 +751,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				case curidx == 0:
 					abovelinelen := s.lines[s.y-1].length()
 					s.joinLines(s.y, s.y-1)
-					s.movecursor(up)
+					s.movecursor(up, 1)
 					s.x = s.calcx(abovelinelen - 1)
 					if s.width-1 < s.x {
 						s.xoffset = s.x - s.width/2
@@ -779,7 +779,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			default:
 				s.moveXToRightEdgeCharIfNecessary()
 				s.insertchar(newCharacter(r))
-				s.movecursor(right)
+				s.movecursor(right, 1)
 			}
 
 		default:
