@@ -187,8 +187,8 @@ type screen struct {
 	width           int
 	mode            mode
 	lines           []*line
-	x               int
-	y               int
+	x               int // x cursor based on term screen
+	y               int // y cursor based on buffer
 	xoffset         int
 	yoffset         int
 	modechanged     bool
@@ -298,23 +298,6 @@ func (s *screen) movecursor(direction direction) {
 		}
 
 		s.y--
-		// switch {
-		// case s.y == 0 && s.yoffset == 0:
-		// 	// when cursor is on the top and the first line is shown at the top,
-		// 	// do nothing.
-		// 	return
-
-		// case s.y-s.yoffset == 0 && 0 < s.yoffset:
-		// 	// when cursor is on the top but still upper line exists,
-		// 	// scroll 1 line up but the cursor itself does not move.
-		// 	s.y--
-		// 	s.yoffset--
-		// 	s.dispzoneChanged = true
-
-		// default:
-		// 	// just move the cursor itself
-		// 	s.y--
-		// }
 
 	case down:
 		if s.y == len(s.lines)-1 {
@@ -322,21 +305,6 @@ func (s *screen) movecursor(direction direction) {
 		}
 
 		s.y++
-		// switch {
-		// case s.y == len(s.lines)-1:
-		// 	// when there are no more lines, do nothing.
-		// 	return
-
-		// case s.y-s.yoffset == s.width-1 && s.y < len(s.lines)-1:
-		// 	// when cursor is at the bottom but lines still exist, scroll down.
-		// 	s.y++
-		// 	s.yoffset++
-		// 	s.dispzoneChanged = true
-
-		// default:
-		// 	// just move the cursor itself
-		// 	s.y++
-		// }
 
 	case left:
 		/*
