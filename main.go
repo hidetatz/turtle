@@ -84,11 +84,11 @@ type line struct {
 	buffer []*character
 }
 
-func emptyline() *line {
+func newemptyline() *line {
 	return &line{buffer: []*character{newCharacter('\n')}}
 }
 
-func newlinefromstring(s string) *line {
+func newline(s string) *line {
 	runes := []rune(s)
 	buff := make([]*character, len(runes))
 	for i := range runes {
@@ -107,7 +107,7 @@ func (l *line) String() string {
 	return sb.String()
 }
 
-func (l *line) indexByCursor(cursor, offset int) int {
+func (l *line) charidx(cursor, offset int) int {
 	x := -offset
 	for i, c := range l.buffer {
 		x += c.dispWidth
@@ -133,7 +133,7 @@ func (l *line) width() int {
 	return x
 }
 
-func (l *line) widthTo(idx int) int {
+func (l *line) widthto(idx int) int {
 	x := 0
 	for i := range idx {
 		x += l.buffer[i].dispWidth
@@ -149,11 +149,11 @@ func (l *line) copy() *line {
 	return copy
 }
 
-func (l *line) insertChar(c *character, at int) {
+func (l *line) insertchar(c *character, at int) {
 	l.buffer = slices.Insert(l.buffer, at, c)
 }
 
-func (l *line) deleteChar(at int) {
+func (l *line) deletechar(at int) {
 	l.buffer = slices.Delete(l.buffer, at, at+1)
 }
 
@@ -182,30 +182,15 @@ func cut(s string, from, limit int) string {
  */
 
 type screen struct {
-	term terminal
-
-	// terminal screen height and width
-	width  int
-	height int
-
-	// current mode
-	mode mode
-
-	// whole text contents in the current buffer.
-	lines []*line
-	// file  *os.File
-
-	// cursor position based on the character
-	x int
-	y int
-
-	// the index indicating the upper left corner of the rectangle that is
-	// cut from the text and actually displayed in the terminal.
-	xoffset int
-	yoffset int
-
-	// state dirtiness. if it's dirty, it means the actual terminal screen and
-	// the state of screen on memory are not synchronized. It's done in synchronize().
+	term            terminal
+	width           int
+	height          int
+	mode            mode
+	lines           []*line
+	x               int
+	y               int
+	xoffset         int
+	yoffset         int
 	modechanged     bool
 	dispzoneChanged bool
 	changedlines    []int
@@ -233,8 +218,8 @@ func (s *screen) synchronize() {
 		x = lim - 1
 	} else {
 		// move to the head of the character. this works if the character width is bigger than 1.
-		curidx := curline.indexByCursor(s.x, s.xoffset)
-		widthToCurChar := curline.widthTo(curidx)
+		curidx := curline.charidx(s.x, s.xoffset)
+		widthToCurChar := curline.widthto(curidx)
 		x = widthToCurChar - s.xoffset
 		if x < 0 {
 			s.xoffset -= -s.x
@@ -305,7 +290,7 @@ const (
 	right
 )
 
-func (s *screen) moveCursor(direction direction) {
+func (s *screen) movecursor(direction direction) {
 	switch direction {
 	case up:
 		switch {
@@ -364,7 +349,7 @@ func (s *screen) moveCursor(direction direction) {
 
 			// if the most right character is not shown, move to it.
 			if curline.width()-1 < s.xoffset {
-				widthToLastchar := curline.widthTo(curline.length() - 1)
+				widthToLastchar := curline.widthto(curline.length() - 1)
 				s.xoffset = widthToLastchar
 				s.dispzoneChanged = true
 				s.x = 0
@@ -378,7 +363,7 @@ func (s *screen) moveCursor(direction direction) {
 
 		// usual case
 
-		curidx := curline.indexByCursor(s.x, s.xoffset)
+		curidx := curline.charidx(s.x, s.xoffset)
 
 		// if currently on the leftmost character, do not move.
 		if curidx == 0 {
@@ -391,7 +376,7 @@ func (s *screen) moveCursor(direction direction) {
 		}
 
 		// move to the left character.
-		widthToLeftChar := curline.widthTo(curidx - 1)
+		widthToLeftChar := curline.widthto(curidx - 1)
 		s.x = widthToLeftChar - s.xoffset
 
 		// if x is less than 0, do scroll.
@@ -417,7 +402,7 @@ func (s *screen) moveCursor(direction direction) {
 
 		// usual case
 
-		curidx := curline.indexByCursor(s.x, s.xoffset)
+		curidx := curline.charidx(s.x, s.xoffset)
 
 		// if currently on the rightmost character, do not move.
 		if curidx == curline.length()-1 {
@@ -425,7 +410,7 @@ func (s *screen) moveCursor(direction direction) {
 		}
 
 		// move to the right character.
-		widthToRightChar := curline.widthTo(curidx + 1)
+		widthToRightChar := curline.widthto(curidx + 1)
 		s.x = widthToRightChar - s.xoffset
 
 		// if x is bigger than screen width, do scroll.
@@ -443,9 +428,9 @@ func (s *screen) moveCursor(direction direction) {
 func (s *screen) insertline(direction direction) {
 	switch direction {
 	case up:
-		s.lines = slices.Insert(s.lines, s.y, emptyline())
+		s.lines = slices.Insert(s.lines, s.y, newemptyline())
 	case down:
-		s.lines = slices.Insert(s.lines, s.y+1, emptyline())
+		s.lines = slices.Insert(s.lines, s.y+1, newemptyline())
 	default:
 		panic("invalid direction is passed to addline")
 	}
@@ -455,31 +440,31 @@ func (s *screen) insertline(direction direction) {
 	}
 }
 
-func (s *screen) insertChar(c *character) {
+func (s *screen) insertchar(c *character) {
 	var idx int
 	if s.currentLine().length() == 0 {
 		idx = 0
 	} else {
 		idx = s.curCharIdxX()
 	}
-	s.currentLine().insertChar(c, idx)
+	s.currentLine().insertchar(c, idx)
 	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) deleteCurrentChar() {
-	s.currentLine().deleteChar(s.curCharIdxX())
+	s.currentLine().deletechar(s.curCharIdxX())
 	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) curCharIdxX() int {
-	return s.currentLine().indexByCursor(s.x, s.xoffset)
+	return s.currentLine().charidx(s.x, s.xoffset)
 }
 
 func (s *screen) deleteCurrentLine() {
-	s.deleteLine(s.y)
+	s.deleteline(s.y)
 }
 
-func (s *screen) deleteLine(y int) {
+func (s *screen) deleteline(y int) {
 	for i := y; i < len(s.lines); i++ {
 		s.changedlines = append(s.changedlines, i)
 	}
@@ -534,18 +519,18 @@ func (s *screen) joinLines(from, to int) int {
 	}
 
 	base := s.lines[from]
-	base.deleteChar(len(base.buffer) - 1) // delete \n
+	base.deletechar(len(base.buffer) - 1) // delete \n
 
 	for i := from + 1; i <= to; i++ {
 		l := s.lines[i]
-		l.deleteChar(len(l.buffer) - 1)
+		l.deletechar(len(l.buffer) - 1)
 		base.buffer = append(base.buffer, l.buffer...)
 	}
 
 	base.buffer = append(base.buffer, newCharacter('\n')) // restore deleted \n
 
 	for i := from + 1; i <= to; i++ {
-		s.deleteLine(i)
+		s.deleteline(i)
 	}
 
 	for i := from; i < len(s.lines); i++ {
@@ -644,11 +629,11 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 	scanner := bufio.NewScanner(text)
 	for scanner.Scan() {
 		line := scanner.Text()
-		s.lines = append(s.lines, newlinefromstring(line))
+		s.lines = append(s.lines, newline(line))
 	}
 
 	if len(s.lines) == 0 {
-		s.lines = []*line{emptyline()}
+		s.lines = []*line{newemptyline()}
 	}
 
 	s.synchronize()
@@ -690,7 +675,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			case r == 'd':
 				s.moveXToRightEdgeCharIfNecessary()
 				curline := s.currentLine()
-				curidx := curline.indexByCursor(s.x, s.xoffset)
+				curidx := curline.charidx(s.x, s.xoffset)
 				removingNL := curidx == curline.length()-1
 
 				if removingNL {
@@ -703,7 +688,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			case r == 'o':
 				s.insertline(down)
-				s.moveCursor(down)
+				s.movecursor(down)
 				s.changeMode(insert)
 
 			case r == 'O':
@@ -711,16 +696,16 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(insert)
 
 			case r == 'h', isArrowKey && dir == left:
-				s.moveCursor(left)
+				s.movecursor(left)
 
 			case r == 'j', isArrowKey && dir == down:
-				s.moveCursor(down)
+				s.movecursor(down)
 
 			case r == 'k', isArrowKey && dir == up:
-				s.moveCursor(up)
+				s.movecursor(up)
 
 			case r == 'l', isArrowKey && dir == right:
-				s.moveCursor(right)
+				s.movecursor(right)
 			}
 
 		case insert:
@@ -729,23 +714,23 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(normal)
 
 			case isArrowKey && dir == left:
-				s.moveCursor(left)
+				s.movecursor(left)
 
 			case isArrowKey && dir == down:
-				s.moveCursor(down)
+				s.movecursor(down)
 
 			case isArrowKey && dir == up:
-				s.moveCursor(up)
+				s.movecursor(up)
 
 			case isArrowKey && dir == right:
-				s.moveCursor(right)
+				s.movecursor(right)
 
 			case r == 13: // Enter
 				s.moveXToRightEdgeCharIfNecessary()
 
 				curline := s.currentLine()
 				copy := curline.copy()
-				curidx := curline.indexByCursor(s.x, s.xoffset)
+				curidx := curline.charidx(s.x, s.xoffset)
 
 				// cut current line
 				s.lines[s.y].buffer = append(curline.buffer[:curidx], newCharacter('\n'))
@@ -753,7 +738,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				// insert line below
 				s.insertline(down)
 				s.lines[s.y+1].buffer = copy.buffer[curidx:]
-				s.moveCursor(down)
+				s.movecursor(down)
 				s.x = 0
 				if s.xoffset != 0 {
 					s.xoffset = 0
@@ -764,7 +749,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.moveXToRightEdgeCharIfNecessary()
 
 				curline := s.currentLine()
-				curidx := curline.indexByCursor(s.x, s.xoffset)
+				curidx := curline.charidx(s.x, s.xoffset)
 
 				switch {
 				case curidx == 0 && s.y == 0:
@@ -773,7 +758,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				case curidx == 0:
 					abovelinelen := s.lines[s.y-1].length()
 					s.joinLines(s.y, s.y-1)
-					s.moveCursor(up)
+					s.movecursor(up)
 					s.x = s.calcx(abovelinelen - 1)
 					if s.height-1 < s.x {
 						s.xoffset = s.x - s.height/2
@@ -783,7 +768,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 				default:
 					// delete the char
-					curline.deleteChar(curidx - 1)
+					curline.deletechar(curidx - 1)
 					s.x = s.calcx(curidx - 1)
 					if s.x == 0 && s.xoffset != 0 {
 						s.xoffset--
@@ -800,8 +785,8 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			default:
 				s.moveXToRightEdgeCharIfNecessary()
-				s.insertChar(newCharacter(r))
-				s.moveCursor(right)
+				s.insertchar(newCharacter(r))
+				s.movecursor(right)
 			}
 
 		default:
