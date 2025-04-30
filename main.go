@@ -433,6 +433,21 @@ func (s *screen) movecursor(direction direction) {
 	default:
 		panic("invalid direction is passed")
 	}
+
+	// do vertical scroll if needed
+	switch {
+	case s.y < s.yoffset:
+		// scroll up
+		delta := s.yoffset - s.y
+		s.yoffset -= delta
+		s.dispzoneChanged = true
+
+	case s.yoffset+s.height-1 < s.y:
+		// scroll down
+		delta := s.y - (s.yoffset + s.height - 1)
+		s.yoffset += delta
+		s.dispzoneChanged = true
+	}
 }
 
 func (s *screen) insertline(direction direction) {
