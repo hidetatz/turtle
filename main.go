@@ -183,8 +183,8 @@ func cut(s string, from, limit int) string {
 
 type screen struct {
 	term            terminal
-	width           int
 	height          int
+	width           int
 	mode            mode
 	lines           []*line
 	x               int
@@ -230,20 +230,20 @@ func (s *screen) synchronize() {
 
 	// update status line
 	if s.modechanged {
-		s.term.putcursor(0, s.width)
+		s.term.putcursor(0, s.height)
 		s.term.clearline()
-		fmt.Fprint(s.term, cut(fmt.Sprintf("mode: %v", s.mode), 0, s.height))
+		fmt.Fprint(s.term, cut(fmt.Sprintf("mode: %v", s.mode), 0, s.width))
 	}
 
 	// update lines
 	if s.dispzoneChanged {
 		// when topline is changed, all shown lines must be updated
-		for i := 0; i < s.width; i++ {
+		for i := 0; i < s.height; i++ {
 			s.term.putcursor(0, i)
 			s.term.clearline()
 			if s.yoffset+i < len(s.lines) {
 				line := s.lines[s.yoffset+i]
-				fmt.Fprint(s.term, line.cut(s.xoffset, s.height))
+				fmt.Fprint(s.term, line.cut(s.xoffset, s.width))
 			}
 		}
 	} else if len(s.changedlines) != 0 {
@@ -257,7 +257,7 @@ func (s *screen) synchronize() {
 			}
 
 			// if changed line is below screen bottom, no need to re-render.
-			if s.width-1 < l-s.yoffset {
+			if s.height-1 < l-s.yoffset {
 				continue
 			}
 
@@ -267,7 +267,7 @@ func (s *screen) synchronize() {
 			// the line might be already deleted, render empty if so
 			var line string
 			if l <= len(s.lines)-1 {
-				line = s.lines[l].cut(s.xoffset, s.height)
+				line = s.lines[l].cut(s.xoffset, s.width)
 			}
 			fmt.Fprint(s.term, line)
 		}
@@ -293,40 +293,50 @@ const (
 func (s *screen) movecursor(direction direction) {
 	switch direction {
 	case up:
-		switch {
-		case s.y == 0 && s.yoffset == 0:
-			// when cursor is on the top and the first line is shown at the top,
-			// do nothing.
+		if s.y == 0 {
 			return
-
-		case s.y-s.yoffset == 0 && 0 < s.yoffset:
-			// when cursor is on the top but still upper line exists,
-			// scroll 1 line up but the cursor itself does not move.
-			s.y--
-			s.yoffset--
-			s.dispzoneChanged = true
-
-		default:
-			// just move the cursor itself
-			s.y--
 		}
+
+		s.y--
+		// switch {
+		// case s.y == 0 && s.yoffset == 0:
+		// 	// when cursor is on the top and the first line is shown at the top,
+		// 	// do nothing.
+		// 	return
+
+		// case s.y-s.yoffset == 0 && 0 < s.yoffset:
+		// 	// when cursor is on the top but still upper line exists,
+		// 	// scroll 1 line up but the cursor itself does not move.
+		// 	s.y--
+		// 	s.yoffset--
+		// 	s.dispzoneChanged = true
+
+		// default:
+		// 	// just move the cursor itself
+		// 	s.y--
+		// }
 
 	case down:
-		switch {
-		case s.y == len(s.lines)-1:
-			// when there are no more lines, do nothing.
+		if s.y == len(s.lines)-1 {
 			return
-
-		case s.y-s.yoffset == s.width-1 && s.y < len(s.lines)-1:
-			// when cursor is at the bottom but lines still exist, scroll down.
-			s.y++
-			s.yoffset++
-			s.dispzoneChanged = true
-
-		default:
-			// just move the cursor itself
-			s.y++
 		}
+
+		s.y++
+		// switch {
+		// case s.y == len(s.lines)-1:
+		// 	// when there are no more lines, do nothing.
+		// 	return
+
+		// case s.y-s.yoffset == s.width-1 && s.y < len(s.lines)-1:
+		// 	// when cursor is at the bottom but lines still exist, scroll down.
+		// 	s.y++
+		// 	s.yoffset++
+		// 	s.dispzoneChanged = true
+
+		// default:
+		// 	// just move the cursor itself
+		// 	s.y++
+		// }
 
 	case left:
 		/*
@@ -414,10 +424,10 @@ func (s *screen) movecursor(direction direction) {
 		s.x = widthToRightChar - s.xoffset
 
 		// if x is bigger than screen width, do scroll.
-		if s.height-1 < s.x {
-			s.xoffset += s.x - (s.height - 1)
+		if s.width-1 < s.x {
+			s.xoffset += s.x - (s.width - 1)
 			s.dispzoneChanged = true
-			s.x = s.height - 1
+			s.x = s.width - 1
 		}
 
 	default:
@@ -554,7 +564,7 @@ func (s *screen) calcx(idx int) int {
 }
 
 func (s *screen) debug() {
-	debug("maxRows: %v, maxCols: %v, mode: %v, cursor: {x: %v, y: %v}, lines_count: %v, curlinelength: %v, curlinewidth: %v, dispFromX: %v, dispFromY: %v\n", s.width, s.height, s.mode, s.x, s.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
+	debug("height: %v, width: %v, mode: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n", s.height, s.width, s.mode, s.x, s.y, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
@@ -614,8 +624,8 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 	s := &screen{
 		term:            term,
-		width:           row - 2,
-		height:          col,
+		height:          row - 2,
+		width:           col,
 		mode:            normal,
 		x:               0,
 		y:               0,
@@ -760,8 +770,8 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					s.joinLines(s.y, s.y-1)
 					s.movecursor(up)
 					s.x = s.calcx(abovelinelen - 1)
-					if s.height-1 < s.x {
-						s.xoffset = s.x - s.height/2
+					if s.width-1 < s.x {
+						s.xoffset = s.x - s.width/2
 						s.x = s.x - s.xoffset
 						s.dispzoneChanged = true
 					}
