@@ -588,7 +588,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 	fin, err := term.init()
 	if err != nil {
 		fin()
-		panic(fin)
+		panic(err)
 	}
 
 	defer fin()
