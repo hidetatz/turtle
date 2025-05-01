@@ -207,41 +207,18 @@ func (s *screen) currentLine() *line {
 }
 
 func (s *screen) render() {
-	curline := s.currentLine()
-	width := curline.width()
+	/*
+	 * After modifying the screen state, renders it to the terminal screen to synchronize everything.
+	 */
 
-	x := s.x
-
-	// when the line is too short to be shown, scroll left
-	if width-1 < s.xoffset {
-		delta := s.xoffset - (width - 1)
-		s.xoffset -= delta
-		s.dispzoneChanged = true
-	}
-
-	// when the x is too right, set x to the line tail
-	if (width-1)-s.xoffset < s.x {
-		x = (width - 1) - s.xoffset
-	}
-
-	// move to the head of the character. this works if the character width is bigger than 1.
-	curidx := curline.charidx(x, s.xoffset)
-	x = curline.widthto(curidx) - s.xoffset
-	if x < 0 {
-		delta := -x
-		s.xoffset -= delta
-		x += delta
-		s.dispzoneChanged = true
-	}
-
-	// update status line
+	/* update status line */
 	if s.modechanged {
 		s.term.putcursor(0, s.height)
 		s.term.clearline()
 		fmt.Fprint(s.term, cut(fmt.Sprintf("mode: %v", s.mode), 0, s.width))
 	}
 
-	// update lines
+	/* update texts */
 	if s.dispzoneChanged {
 		// when topline is changed, all shown lines must be updated
 		for i := 0; i < s.height; i++ {
@@ -279,6 +256,24 @@ func (s *screen) render() {
 		}
 	}
 
+	/* update cursor position */
+
+	// NOTE: some tweaking x is applied here, but this does not change s.x.
+	curline := s.currentLine()
+	width := curline.width()
+	x := s.x - s.xoffset
+
+	// when the x is too right, set x to the line tail.
+	// This must not change s.x because s.x should be kept when moving to another long line.
+	if (width - 1) < s.x {
+		x = (width - 1) - s.xoffset
+	}
+
+	// set x to be head of the character. this works when the current char width is not 1.
+	// This must not change s.x because s.x should be kept when moving to another line.
+	curidx := curline.charidx(x, s.xoffset)
+	x = curline.widthto(curidx) - s.xoffset
+
 	// move cursor after all.
 	s.term.putcursor(x, s.y-s.yoffset)
 	s.actualx = x
@@ -299,7 +294,10 @@ const (
 
 func (s *screen) movecursor(direction direction, cnt int) {
 	/*
-	 * move x/y
+	 * 1. move x/y.
+	 * note that x and y is absolute coordination in the whole text buffer, so
+	 * after this switch statement, x and y might be pointing somewhere out the
+	 * terminal screen.
 	 */
 	switch direction {
 	case up:
@@ -309,38 +307,37 @@ func (s *screen) movecursor(direction direction, cnt int) {
 		s.y = min(s.y+cnt, len(s.lines)-1)
 
 	case left:
-		s.x = s.actualx
 		curline := s.currentLine()
 		curidx := s.curCharIdxX()
-		delta := curline.widthto(curidx) - curline.widthto(max(curidx-cnt, 0))
-		s.x -= delta
+		s.x = curline.widthto(max(curidx-cnt, 0))
 
 	case right:
-		s.x = s.actualx
 		curline := s.currentLine()
 		curidx := s.curCharIdxX()
-		delta := curline.widthto(min(curidx+cnt, curline.length()-1)) - curline.widthto(curidx)
-		s.x += delta
+		s.x = curline.widthto(min(curidx+cnt, curline.length()-1))
 
 	default:
 		panic("invalid direction is passed")
 	}
 
 	/*
+	 * As of here, the x and y might be pointing out the screen,
+	 * 2. if so, do scroll.
+	 */
+
+	/*
 	 * horizontal scroll
 	 */
 
 	switch {
-	case s.x < 0:
-		delta := -s.x
+	case s.x < s.xoffset:
+		delta := s.xoffset - s.x
 		s.xoffset -= delta
-		s.x += delta
 		s.dispzoneChanged = true
 
-	case s.width-1 < s.x:
-		delta := s.x - (s.width - 1)
+	case s.xoffset+s.width-1 < s.x:
+		delta := s.x - (s.xoffset + s.width - 1)
 		s.xoffset += delta
-		s.x -= delta
 		s.dispzoneChanged = true
 	}
 
@@ -358,6 +355,17 @@ func (s *screen) movecursor(direction direction, cnt int) {
 		// scroll down
 		delta := s.y - (s.yoffset + s.height - 1)
 		s.yoffset += delta
+		s.dispzoneChanged = true
+	}
+
+	/*
+	 * 3. After the cursor move and scroll, if the current line is not shown as
+	 * it's too short, scroll left.
+	 */
+	width := s.currentLine().width()
+	if width-1 < s.xoffset {
+		delta := s.xoffset - (width - 1)
+		s.xoffset -= delta
 		s.dispzoneChanged = true
 	}
 }
@@ -394,7 +402,7 @@ func (s *screen) deleteCurrentChar() {
 }
 
 func (s *screen) curCharIdxX() int {
-	return s.currentLine().charidx(s.x, s.xoffset)
+	return s.currentLine().charidx(s.actualx, s.xoffset)
 }
 
 func (s *screen) deleteCurrentLine() {
@@ -490,7 +498,7 @@ func (s *screen) calcx(idx int) int {
 	return x - s.xoffset
 }
 
-func (s *screen) debug() {
+func (s *screen) debug(msg ...string) {
 	debug("height: %v, width: %v, mode: %v, x: %v, y: %v, actualx: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n", s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
 }
 
