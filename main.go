@@ -332,14 +332,16 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	 * horizontal scroll
 	 */
 
+	pad := 4
+
 	switch {
-	case s.x < s.xoffset:
-		delta := s.xoffset - s.x
+	case max(0, s.x-pad) < s.xoffset:
+		delta := s.xoffset - max(0, s.x-pad)
 		s.xoffset -= delta
 		s.scrolled = true
 
-	case s.xoffset+s.width-1 < s.x:
-		delta := s.x - (s.xoffset + s.width - 1)
+	case s.xoffset+s.width-1 < min(s.curline().width(), s.x+pad):
+		delta := min(s.curline().width(), s.x+pad) - (s.xoffset + s.width - 1)
 		s.xoffset += delta
 		s.scrolled = true
 	}
@@ -348,15 +350,15 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	 * vertical scroll
 	 */
 	switch {
-	case s.y < s.yoffset:
+	case max(0, s.y-pad) < s.yoffset:
 		// scroll up
-		delta := s.yoffset - s.y
+		delta := s.yoffset - max(0, s.y-pad)
 		s.yoffset -= delta
 		s.scrolled = true
 
-	case s.yoffset+s.height-1 < s.y:
+	case s.yoffset+s.height-1 < min(len(s.lines), s.y+pad):
 		// scroll down
-		delta := s.y - (s.yoffset + s.height - 1)
+		delta := min(len(s.lines), s.y+pad) - (s.yoffset + s.height - 1)
 		s.yoffset += delta
 		s.scrolled = true
 	}
