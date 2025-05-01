@@ -16,6 +16,10 @@ import (
 
 var _debug bool
 
+/*
+ * mode
+ */
+
 type mode int
 
 const (
@@ -40,36 +44,34 @@ func (m mode) String() string {
 
 // character represents a single character, such as "a", "1", "#", space, tab, etc.
 type character struct {
-	r rune
-	// true if the character represents Tab.
-	tab bool
-	// true if the character represents new line.
-	nl        bool
-	dispWidth int
-	str       string
+	r     rune
+	tab   bool // true if the character represents Tab.
+	nl    bool // true if the character represents new line.
+	width int
+	str   string
 }
 
 func newCharacter(r rune) *character {
 	// Raw Tab changes its size dynamically and it's hard to properly display, so
 	// Tab is treated as 4 spaces.
 	if r == '\t' {
-		return &character{tab: true, dispWidth: 4, str: "    "}
+		return &character{tab: true, width: 4, str: "    "}
 	}
 
 	// In turtle newline is rendered as a single space.
 	if r == '\n' {
-		return &character{nl: true, dispWidth: 1, str: " "}
+		return &character{nl: true, width: 1, str: " "}
 	}
 
 	if fullwidth(r) {
-		return &character{r: r, dispWidth: 2, str: string(r)}
+		return &character{r: r, width: 2, str: string(r)}
 	}
 
-	return &character{r: r, dispWidth: 1, str: string(r)}
+	return &character{r: r, width: 1, str: string(r)}
 }
 
 func (c *character) copy() *character {
-	return &character{c.r, c.tab, c.nl, c.dispWidth, c.str}
+	return &character{c.r, c.tab, c.nl, c.width, c.str}
 }
 
 func (c *character) String() string {
@@ -110,7 +112,7 @@ func (l *line) String() string {
 func (l *line) charidx(cursor, offset int) int {
 	x := -offset
 	for i, c := range l.buffer {
-		x += c.dispWidth
+		x += c.width
 		if x >= cursor+1 {
 			return i
 		}
@@ -120,7 +122,6 @@ func (l *line) charidx(cursor, offset int) int {
 }
 
 func (l *line) length() int {
-	// todo: can be cached
 	return len(l.buffer)
 }
 
@@ -128,7 +129,7 @@ func (l *line) width() int {
 	// todo: can be cached
 	x := 0
 	for i := range l.length() {
-		x += l.buffer[i].dispWidth
+		x += l.buffer[i].width
 	}
 	return x
 }
@@ -136,7 +137,7 @@ func (l *line) width() int {
 func (l *line) widthto(idx int) int {
 	x := 0
 	for i := range idx {
-		x += l.buffer[i].dispWidth
+		x += l.buffer[i].width
 	}
 	return x
 }
@@ -182,19 +183,21 @@ func cut(s string, from, limit int) string {
  */
 
 type screen struct {
-	term            terminal
-	height          int
-	width           int
-	mode            mode
-	lines           []*line
-	x               int // x cursor based on term screen
-	y               int // y cursor based on buffer
-	actualx         int
-	xoffset         int
-	yoffset         int
-	modechanged     bool
-	dispzoneChanged bool
-	changedlines    []int
+	term    terminal
+	height  int
+	width   int
+	mode    mode
+	lines   []*line
+	x       int // absolute x cursor based on term screen
+	y       int // absolute y cursor based on buffer
+	xoffset int
+	yoffset int
+
+	actualx int
+
+	modechanged  bool
+	scrolled     bool
+	changedlines []int
 }
 
 func (s *screen) changeMode(mode mode) {
@@ -202,7 +205,7 @@ func (s *screen) changeMode(mode mode) {
 	s.modechanged = true
 }
 
-func (s *screen) currentLine() *line {
+func (s *screen) curline() *line {
 	return s.lines[s.y]
 }
 
@@ -219,7 +222,7 @@ func (s *screen) render() {
 	}
 
 	/* update texts */
-	if s.dispzoneChanged {
+	if s.scrolled {
 		// when topline is changed, all shown lines must be updated
 		for i := 0; i < s.height; i++ {
 			s.term.putcursor(0, i)
@@ -259,7 +262,7 @@ func (s *screen) render() {
 	/* update cursor position */
 
 	// NOTE: some tweaking x is applied here, but this does not change s.x.
-	curline := s.currentLine()
+	curline := s.curline()
 	width := curline.width()
 	x := s.x - s.xoffset
 
@@ -279,7 +282,7 @@ func (s *screen) render() {
 	s.actualx = x
 
 	s.modechanged = false
-	s.dispzoneChanged = false
+	s.scrolled = false
 	s.changedlines = []int{}
 }
 
@@ -307,12 +310,12 @@ func (s *screen) movecursor(direction direction, cnt int) {
 		s.y = min(s.y+cnt, len(s.lines)-1)
 
 	case left:
-		curline := s.currentLine()
+		curline := s.curline()
 		curidx := s.curCharIdxX()
 		s.x = curline.widthto(max(curidx-cnt, 0))
 
 	case right:
-		curline := s.currentLine()
+		curline := s.curline()
 		curidx := s.curCharIdxX()
 		s.x = curline.widthto(min(curidx+cnt, curline.length()-1))
 
@@ -333,12 +336,12 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	case s.x < s.xoffset:
 		delta := s.xoffset - s.x
 		s.xoffset -= delta
-		s.dispzoneChanged = true
+		s.scrolled = true
 
 	case s.xoffset+s.width-1 < s.x:
 		delta := s.x - (s.xoffset + s.width - 1)
 		s.xoffset += delta
-		s.dispzoneChanged = true
+		s.scrolled = true
 	}
 
 	/*
@@ -349,24 +352,24 @@ func (s *screen) movecursor(direction direction, cnt int) {
 		// scroll up
 		delta := s.yoffset - s.y
 		s.yoffset -= delta
-		s.dispzoneChanged = true
+		s.scrolled = true
 
 	case s.yoffset+s.height-1 < s.y:
 		// scroll down
 		delta := s.y - (s.yoffset + s.height - 1)
 		s.yoffset += delta
-		s.dispzoneChanged = true
+		s.scrolled = true
 	}
 
 	/*
 	 * 3. After the cursor move and scroll, if the current line is not shown as
 	 * it's too short, scroll left.
 	 */
-	width := s.currentLine().width()
+	width := s.curline().width()
 	if width-1 < s.xoffset {
 		delta := s.xoffset - (width - 1)
 		s.xoffset -= delta
-		s.dispzoneChanged = true
+		s.scrolled = true
 	}
 }
 
@@ -387,22 +390,22 @@ func (s *screen) insertline(direction direction) {
 
 func (s *screen) insertchar(c *character) {
 	var idx int
-	if s.currentLine().length() == 0 {
+	if s.curline().length() == 0 {
 		idx = 0
 	} else {
 		idx = s.curCharIdxX()
 	}
-	s.currentLine().insertchar(c, idx)
+	s.curline().insertchar(c, idx)
 	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) deleteCurrentChar() {
-	s.currentLine().deletechar(s.curCharIdxX())
+	s.curline().deletechar(s.curCharIdxX())
 	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) curCharIdxX() int {
-	return s.currentLine().charidx(s.actualx, s.xoffset)
+	return s.curline().charidx(s.actualx, s.xoffset)
 }
 
 func (s *screen) deleteCurrentLine() {
@@ -417,7 +420,7 @@ func (s *screen) deleteline(y int) {
 }
 
 func (s *screen) moveXToRightEdgeCharIfNecessary() bool {
-	curline := s.currentLine()
+	curline := s.curline()
 	width := curline.width()
 
 	// if the cursor is pointing the place on which no character exists ("too right"),
@@ -426,14 +429,14 @@ func (s *screen) moveXToRightEdgeCharIfNecessary() bool {
 		if width == 1 {
 			s.xoffset = 0
 			s.x = 0
-			s.dispzoneChanged = true
+			s.scrolled = true
 		} else if 0 < width-s.xoffset {
 			s.x = width - s.xoffset - 1
 		} else {
 			// show right edge character for useful
 			s.xoffset = width - 2
 			s.x = 1
-			s.dispzoneChanged = true
+			s.scrolled = true
 		}
 		return true
 	}
@@ -486,10 +489,10 @@ func (s *screen) joinLines(from, to int) int {
 }
 
 func (s *screen) calcx(idx int) int {
-	curline := s.currentLine()
+	curline := s.curline()
 	x := 0
 	for i := 0; i < idx; i++ {
-		x += curline.buffer[i].dispWidth
+		x += curline.buffer[i].width
 	}
 	if x < s.xoffset {
 		return 0
@@ -500,7 +503,7 @@ func (s *screen) calcx(idx int) int {
 
 func (s *screen) debug(msg ...string) {
 	debug("msg: %v, height: %v, width: %v, mode: %v, x: %v, y: %v, actualx: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
-		msg, s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
+		msg, s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
@@ -559,17 +562,17 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 	}
 
 	s := &screen{
-		term:            term,
-		height:          row - 2,
-		width:           col,
-		mode:            normal,
-		x:               0,
-		y:               0,
-		xoffset:         0,
-		yoffset:         0,
-		modechanged:     true,
-		dispzoneChanged: true,
-		lines:           []*line{},
+		term:        term,
+		height:      row - 2,
+		width:       col,
+		mode:        normal,
+		x:           0,
+		y:           0,
+		xoffset:     0,
+		yoffset:     0,
+		modechanged: true,
+		scrolled:    true,
+		lines:       []*line{},
 	}
 
 	scanner := bufio.NewScanner(text)
@@ -620,7 +623,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			case r == 'd':
 				s.moveXToRightEdgeCharIfNecessary()
-				curline := s.currentLine()
+				curline := s.curline()
 				curidx := curline.charidx(s.x, s.xoffset)
 				removingNL := curidx == curline.length()-1
 
@@ -674,7 +677,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			case r == 13: // Enter
 				s.moveXToRightEdgeCharIfNecessary()
 
-				curline := s.currentLine()
+				curline := s.curline()
 				copy := curline.copy()
 				curidx := curline.charidx(s.x, s.xoffset)
 
@@ -688,13 +691,13 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.x = 0
 				if s.xoffset != 0 {
 					s.xoffset = 0
-					s.dispzoneChanged = true
+					s.scrolled = true
 				}
 
 			case r == 127: // Backspace
 				s.moveXToRightEdgeCharIfNecessary()
 
-				curline := s.currentLine()
+				curline := s.curline()
 				curidx := curline.charidx(s.x, s.xoffset)
 
 				switch {
@@ -709,7 +712,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					if s.width-1 < s.x {
 						s.xoffset = s.x - s.width/2
 						s.x = s.x - s.xoffset
-						s.dispzoneChanged = true
+						s.scrolled = true
 					}
 
 				default:
@@ -719,7 +722,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					if s.x == 0 && s.xoffset != 0 {
 						s.xoffset--
 						s.x = 1
-						s.dispzoneChanged = true
+						s.scrolled = true
 					}
 					s.changedlines = append(s.changedlines, s.y)
 				}
