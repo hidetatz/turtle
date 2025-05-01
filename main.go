@@ -499,7 +499,8 @@ func (s *screen) calcx(idx int) int {
 }
 
 func (s *screen) debug(msg ...string) {
-	debug("height: %v, width: %v, mode: %v, x: %v, y: %v, actualx: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n", s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
+	debug("msg: %v, height: %v, width: %v, mode: %v, x: %v, y: %v, actualx: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
+		msg, s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.currentLine().length(), s.currentLine().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
