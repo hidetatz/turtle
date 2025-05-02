@@ -169,11 +169,7 @@ func cut(s string, from, limit int) string {
 		return ""
 	}
 
-	to := from + limit
-
-	if length < to {
-		to = length
-	}
+	to := min(length, from+limit)
 
 	return s[from:to]
 }
@@ -224,7 +220,7 @@ func (s *screen) render() {
 	/* update texts */
 	if s.scrolled {
 		// when topline is changed, all shown lines must be updated
-		for i := 0; i < s.height; i++ {
+		for i := range s.height {
 			s.term.putcursor(0, i)
 			s.term.clearline()
 			if s.yoffset+i < len(s.lines) {
@@ -410,10 +406,6 @@ func (s *screen) curCharIdxX() int {
 	return s.curline().charidx(s.actualx, s.xoffset)
 }
 
-func (s *screen) deleteCurrentLine() {
-	s.deleteline(s.y)
-}
-
 func (s *screen) deleteline(y int) {
 	for i := y; i < len(s.lines); i++ {
 		s.changedlines = append(s.changedlines, i)
@@ -493,7 +485,7 @@ func (s *screen) joinLines(from, to int) int {
 func (s *screen) calcx(idx int) int {
 	curline := s.curline()
 	x := 0
-	for i := 0; i < idx; i++ {
+	for i := range idx {
 		x += curline.buffer[i].width
 	}
 	if x < s.xoffset {
