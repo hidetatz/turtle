@@ -159,10 +159,8 @@ func (l *line) deletechar(at int) {
 }
 
 func (l *line) cut(from, limit int) string {
-	return cut(l.String(), from, limit)
-}
-
-func cut(s string, from, limit int) string {
+	s := l.String()
+	// todo: consider containing fullwidth char case
 	length := len(s)
 
 	if length < from {
@@ -205,6 +203,10 @@ func (s *screen) curline() *line {
 	return s.lines[s.y]
 }
 
+func (s *screen) statusline() *line {
+	return newline(fmt.Sprintf("mode: %v", s.mode))
+}
+
 func (s *screen) render() {
 	/*
 	 * After modifying the screen state, renders it to the terminal screen to synchronize everything.
@@ -214,12 +216,12 @@ func (s *screen) render() {
 	if s.modechanged {
 		s.term.putcursor(0, s.height)
 		s.term.clearline()
-		fmt.Fprint(s.term, cut(fmt.Sprintf("mode: %v", s.mode), 0, s.width))
+		fmt.Fprint(s.term, s.statusline().cut(0, s.width))
 	}
 
 	/* update texts */
 	if s.scrolled {
-		// when topline is changed, all shown lines must be updated
+		// update all lines
 		for i := range s.height {
 			s.term.putcursor(0, i)
 			s.term.clearline()
@@ -229,29 +231,22 @@ func (s *screen) render() {
 			}
 		}
 	} else if len(s.changedlines) != 0 {
-		// when topline is not changed but some lines are changed, change only them
+		// udpate only changed lines
 		slices.Sort(s.changedlines)
 		s.changedlines = slices.Compact(s.changedlines)
 		for _, l := range s.changedlines {
-			// if changed line is above topline, no need to re-render.
-			if l < s.yoffset {
-				continue
-			}
-
-			// if changed line is below screen bottom, no need to re-render.
-			if s.height-1 < l-s.yoffset {
+			// if changed line is not shown on the screen, skip
+			if l < s.yoffset || s.height-1 < l-s.yoffset {
 				continue
 			}
 
 			s.term.putcursor(0, l-s.yoffset)
 			s.term.clearline()
 
-			// the line might be already deleted, render empty if so
-			var line string
 			if l <= len(s.lines)-1 {
-				line = s.lines[l].cut(s.xoffset, s.width)
+				line := s.lines[l].cut(s.xoffset, s.width)
+				fmt.Fprint(s.term, line)
 			}
-			fmt.Fprint(s.term, line)
 		}
 	}
 
