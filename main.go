@@ -177,17 +177,17 @@ func (l *line) cut(from, limit int) string {
  */
 
 type screen struct {
-	term    terminal
-	height  int
-	width   int
-	mode    mode
-	lines   []*line
-	x       int // absolute x cursor based on term screen
-	y       int // absolute y cursor based on buffer
-	xoffset int
-	yoffset int
+	term   terminal
+	height int
+	width  int
+	mode   mode
+	lines  []*line
+	x      int
+	y      int
 
 	actualx int
+	xoffset int
+	yoffset int
 
 	modechanged  bool
 	scrolled     bool
@@ -208,9 +208,87 @@ func (s *screen) statusline() *line {
 }
 
 func (s *screen) render() {
-	/*
-	 * After modifying the screen state, renders it to the terminal screen to synchronize everything.
-	 */
+	// when the x is too right, set x to the line tail.
+	// This must not change s.x because s.x should be kept when moving to another long line.
+	x := min(s.x, s.curline().width()-1)
+
+	/* scroll x */
+
+	xpad := 4
+	xok := func() direction {
+		// too left, scroll left
+		if x-xpad < s.xoffset {
+			if x < xpad && s.xoffset <= x {
+				// too left but no enough space left
+				return 0
+			}
+			return left
+		}
+
+		// too right, scroll right
+		if s.xoffset+s.width-1 < x+xpad {
+			if s.curline().width()-1 < x+xpad && x <= s.xoffset+s.width-1 {
+				// too right but no enough space right
+				return 0
+			}
+			return right
+		}
+
+		return 0
+	}
+
+	for {
+		dir := xok()
+		if dir == 0 {
+			break
+		}
+
+		if dir == left {
+			s.xoffset -= 1
+		} else {
+			s.xoffset += 1
+		}
+		s.scrolled = true
+	}
+
+	/* scroll y */
+
+	ypad := 4
+	yok := func() direction {
+		// too high, scroll up
+		if s.y-ypad < s.yoffset {
+			if s.y < ypad {
+				// too high but no enough space above
+				return 0
+			}
+			return up
+		}
+
+		// too low, scroll down
+		if s.yoffset+s.height-1 < s.y+ypad {
+			if len(s.lines)-1 < s.y+ypad {
+				// too low but no enough space below
+				return 0
+			}
+			return down
+		}
+
+		return 0
+	}
+
+	for {
+		dir := yok()
+		if dir == 0 {
+			break
+		}
+
+		if dir == up {
+			s.yoffset -= 1
+		} else {
+			s.yoffset += 1
+		}
+		s.scrolled = true
+	}
 
 	/* update status line */
 	if s.modechanged {
@@ -250,28 +328,8 @@ func (s *screen) render() {
 		}
 	}
 
-	/* update cursor position */
-
-	// NOTE: some tweaking x is applied here, but this does not change s.x.
-	curline := s.curline()
-	width := curline.width()
-	x := s.x - s.xoffset
-
-	// when the x is too right, set x to the line tail.
-	// This must not change s.x because s.x should be kept when moving to another long line.
-	if (width - 1) < s.x {
-		x = (width - 1) - s.xoffset
-	}
-
-	// set x to be head of the character. this works when the current char width is not 1.
-	// This must not change s.x because s.x should be kept when moving to another line.
-	curidx := curline.charidx(x, s.xoffset)
-	x = curline.widthto(curidx) - s.xoffset
-
-	// move cursor after all.
-	s.term.putcursor(x, s.y-s.yoffset)
-	s.actualx = x
-
+	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
+	s.actualx = x - s.xoffset
 	s.modechanged = false
 	s.scrolled = false
 	s.changedlines = []int{}
@@ -287,12 +345,6 @@ const (
 )
 
 func (s *screen) movecursor(direction direction, cnt int) {
-	/*
-	 * 1. move x/y.
-	 * note that x and y is absolute coordination in the whole text buffer, so
-	 * after this switch statement, x and y might be pointing somewhere out the
-	 * terminal screen.
-	 */
 	switch direction {
 	case up:
 		s.y = max(s.y-cnt, 0)
@@ -301,68 +353,15 @@ func (s *screen) movecursor(direction direction, cnt int) {
 		s.y = min(s.y+cnt, len(s.lines)-1)
 
 	case left:
-		curline := s.curline()
-		curidx := s.curCharIdxX()
-		s.x = curline.widthto(max(curidx-cnt, 0))
+		nextx := max(0, s.xidx()-cnt)
+		s.x = s.curline().widthto(nextx)
 
 	case right:
-		curline := s.curline()
-		curidx := s.curCharIdxX()
-		s.x = curline.widthto(min(curidx+cnt, curline.length()-1))
+		nextx := min(s.curline().length()-1, s.xidx()+cnt)
+		s.x = s.curline().widthto(nextx)
 
 	default:
 		panic("invalid direction is passed")
-	}
-
-	/*
-	 * As of here, the x and y might be pointing out the screen,
-	 * 2. if so, do scroll.
-	 */
-
-	/*
-	 * horizontal scroll
-	 */
-
-	pad := 4
-
-	switch {
-	case max(0, s.x-pad) < s.xoffset:
-		delta := s.xoffset - max(0, s.x-pad)
-		s.xoffset -= delta
-		s.scrolled = true
-
-	case s.xoffset+s.width-1 < min(s.curline().width(), s.x+pad):
-		delta := min(s.curline().width(), s.x+pad) - (s.xoffset + s.width - 1)
-		s.xoffset += delta
-		s.scrolled = true
-	}
-
-	/*
-	 * vertical scroll
-	 */
-	switch {
-	case max(0, s.y-pad) < s.yoffset:
-		// scroll up
-		delta := s.yoffset - max(0, s.y-pad)
-		s.yoffset -= delta
-		s.scrolled = true
-
-	case s.yoffset+s.height-1 < min(len(s.lines), s.y+pad):
-		// scroll down
-		delta := min(len(s.lines), s.y+pad) - (s.yoffset + s.height - 1)
-		s.yoffset += delta
-		s.scrolled = true
-	}
-
-	/*
-	 * 3. After the cursor move and scroll, if the current line is not shown as
-	 * it's too short, scroll left.
-	 */
-	width := s.curline().width()
-	if width-1 < s.xoffset {
-		delta := s.xoffset - (width - 1)
-		s.xoffset -= delta
-		s.scrolled = true
 	}
 }
 
@@ -386,18 +385,18 @@ func (s *screen) insertchar(c *character) {
 	if s.curline().length() == 0 {
 		idx = 0
 	} else {
-		idx = s.curCharIdxX()
+		idx = s.xidx()
 	}
 	s.curline().insertchar(c, idx)
 	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) deleteCurrentChar() {
-	s.curline().deletechar(s.curCharIdxX())
+	s.curline().deletechar(s.xidx())
 	s.changedlines = append(s.changedlines, s.y)
 }
 
-func (s *screen) curCharIdxX() int {
+func (s *screen) xidx() int {
 	return s.curline().charidx(s.actualx, s.xoffset)
 }
 
@@ -491,8 +490,8 @@ func (s *screen) calcx(idx int) int {
 }
 
 func (s *screen) debug(msg ...string) {
-	debug("msg: %v, height: %v, width: %v, mode: %v, x: %v, y: %v, actualx: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
-		msg, s.height, s.width, s.mode, s.x, s.y, s.actualx, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+	debug("msg: %v, height: %v, width: %v, mode: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
+		msg, s.height, s.width, s.mode, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
