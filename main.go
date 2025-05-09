@@ -134,6 +134,10 @@ func (l *line) width() int {
 	return x
 }
 
+func (l *line) rightedge() int {
+	return l.widthto(l.length() - 1)
+}
+
 func (l *line) widthto(idx int) int {
 	x := 0
 	for i := range idx {
@@ -142,20 +146,30 @@ func (l *line) widthto(idx int) int {
 	return x
 }
 
+func (l *line) inschars(chars []*character, at int) {
+	for i := range chars {
+		l.buffer = slices.Insert(l.buffer, at+i, chars[i])
+	}
+}
+
+func (l *line) delnl() {
+	l.delchar(l.length() - 1)
+}
+
+func (l *line) delchar(at int) {
+	l.buffer = slices.Delete(l.buffer, at, at+1)
+}
+
 func (l *line) copy() *line {
-	copy := &line{buffer: make([]*character, len(l.buffer))}
+	copy := &line{make([]*character, len(l.buffer))}
 	for i := range l.buffer {
 		copy.buffer[i] = l.buffer[i].copy()
 	}
 	return copy
 }
 
-func (l *line) insertchar(c *character, at int) {
-	l.buffer = slices.Insert(l.buffer, at, c)
-}
-
-func (l *line) deletechar(at int) {
-	l.buffer = slices.Delete(l.buffer, at, at+1)
+func (l *line) clear() {
+	l.buffer = []*character{newCharacter('\n')}
 }
 
 func (l *line) cut(from, limit int) string {
@@ -182,15 +196,17 @@ type screen struct {
 	width  int
 	mode   mode
 	lines  []*line
-	x      int
-	y      int
 
+	// current desired cursor position. might be different with the actual position.
+	x int
+	y int
+
+	// terminal state
 	actualx int
 	xoffset int
 	yoffset int
 
 	modechanged  bool
-	scrolled     bool
 	changedlines []int
 }
 
@@ -199,20 +215,22 @@ func (s *screen) changeMode(mode mode) {
 	s.modechanged = true
 }
 
-func (s *screen) curline() *line {
-	return s.lines[s.y]
-}
-
 func (s *screen) statusline() *line {
 	return newline(fmt.Sprintf("mode: %v", s.mode))
 }
 
-func (s *screen) render() {
+func (s *screen) curline() *line {
+	return s.lines[s.y]
+}
+
+func (s *screen) render(first bool) {
 	// when the x is too right, set x to the line tail.
 	// This must not change s.x because s.x should be kept when moving to another long line.
 	x := min(s.x, s.curline().width()-1)
 
 	/* scroll x */
+
+	var scrolled bool
 
 	xpad := 4
 	xok := func() direction {
@@ -248,7 +266,7 @@ func (s *screen) render() {
 		} else {
 			s.xoffset += 1
 		}
-		s.scrolled = true
+		scrolled = true
 	}
 
 	/* scroll y */
@@ -287,7 +305,7 @@ func (s *screen) render() {
 		} else {
 			s.yoffset += 1
 		}
-		s.scrolled = true
+		scrolled = true
 	}
 
 	/* update status line */
@@ -298,7 +316,7 @@ func (s *screen) render() {
 	}
 
 	/* update texts */
-	if s.scrolled {
+	if scrolled || first {
 		// update all lines
 		for i := range s.height {
 			s.term.putcursor(0, i)
@@ -331,7 +349,6 @@ func (s *screen) render() {
 	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
 	s.actualx = x - s.xoffset
 	s.modechanged = false
-	s.scrolled = false
 	s.changedlines = []int{}
 }
 
@@ -365,7 +382,8 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	}
 }
 
-func (s *screen) insertline(direction direction) {
+// insert a line
+func (s *screen) insline(direction direction) {
 	switch direction {
 	case up:
 		s.lines = slices.Insert(s.lines, s.y, newemptyline())
@@ -380,113 +398,66 @@ func (s *screen) insertline(direction direction) {
 	}
 }
 
-func (s *screen) insertchar(c *character) {
-	var idx int
-	if s.curline().length() == 0 {
-		idx = 0
-	} else {
-		idx = s.xidx()
-	}
-	s.curline().insertchar(c, idx)
+// insert characters
+func (s *screen) inschars(chars []*character) {
+	s.inscharsat(chars, s.xidx())
+}
+
+func (s *screen) inscharsat(chars []*character, at int) {
+	s.curline().inschars(chars, at)
 	s.changedlines = append(s.changedlines, s.y)
 }
 
-func (s *screen) deleteCurrentChar() {
-	s.curline().deletechar(s.xidx())
+// delete a char on (idx, s.y)
+func (s *screen) delcharat(idx int) {
+	s.curline().delchar(idx)
 	s.changedlines = append(s.changedlines, s.y)
 }
 
-func (s *screen) xidx() int {
-	return s.curline().charidx(s.actualx, s.xoffset)
+// delete current cursor character
+func (s *screen) delchar() {
+	s.delcharat(s.xidx())
 }
 
-func (s *screen) deleteline(y int) {
+// delete a line
+func (s *screen) delline(y int) {
 	for i := y; i < len(s.lines); i++ {
 		s.changedlines = append(s.changedlines, i)
 	}
 	s.lines = slices.Delete(s.lines, y, y+1)
 }
 
-func (s *screen) moveXToRightEdgeCharIfNecessary() bool {
-	curline := s.curline()
-	width := curline.width()
+// return x character index from the current cursor position on screen
+func (s *screen) xidx() int {
+	return s.curline().charidx(s.actualx, s.xoffset)
+}
 
-	// if the cursor is pointing the place on which no character exists ("too right"),
-	// move cursor to the rightmost character first.
-	if width-1 < s.x+s.xoffset {
-		if width == 1 {
-			s.xoffset = 0
-			s.x = 0
-			s.scrolled = true
-		} else if 0 < width-s.xoffset {
-			s.x = width - s.xoffset - 1
-		} else {
-			// show right edge character for useful
-			s.xoffset = width - 2
-			s.x = 1
-			s.scrolled = true
-		}
-		return true
-	}
-
-	return false
+// ensure current s.x is pointing on the correct character position.
+// if x is too right after up/down move, fix x position.
+// if x is not aligning to the multi length character head, align there.
+func (s *screen) alignx() {
+	s.x = s.curline().widthto(s.xidx())
 }
 
 // from, to both inclusive
-func (s *screen) joinLines(from, to int) int {
-	if to < from {
-		from, to = to, from
-	}
-
-	if from <= 0 {
-		from = 0
-	} else if len(s.lines)-1 < from {
-		from = len(s.lines)
-	}
-
-	if to <= 0 {
-		to = 0
-	} else if len(s.lines)-1 < to {
-		to = len(s.lines)
-	}
-
-	if from == to {
-		return from
-	}
-
-	base := s.lines[from]
-	base.deletechar(len(base.buffer) - 1) // delete \n
-
+func (s *screen) joinlines(from, to int) {
+	// first, append lines to the base line
 	for i := from + 1; i <= to; i++ {
-		l := s.lines[i]
-		l.deletechar(len(l.buffer) - 1)
-		base.buffer = append(base.buffer, l.buffer...)
+		s.lines[from].delnl()
+		s.lines[from].buffer = append(s.lines[from].buffer, s.lines[i].buffer...)
 	}
 
-	base.buffer = append(base.buffer, newCharacter('\n')) // restore deleted \n
-
+	// then, delete joined lines
 	for i := from + 1; i <= to; i++ {
-		s.deleteline(i)
+		s.delline(i)
 	}
 
-	for i := from; i < len(s.lines); i++ {
-		s.changedlines = append(s.changedlines, i)
-	}
-
-	return from
+	s.changedlines = append(s.changedlines, from)
 }
 
-func (s *screen) calcx(idx int) int {
-	curline := s.curline()
-	x := 0
-	for i := range idx {
-		x += curline.buffer[i].width
-	}
-	if x < s.xoffset {
-		return 0
-	}
-
-	return x - s.xoffset
+func (s *screen) clearline() {
+	s.curline().clear()
+	s.changedlines = append(s.changedlines, s.y)
 }
 
 func (s *screen) debug(msg ...string) {
@@ -559,7 +530,6 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		xoffset:     0,
 		yoffset:     0,
 		modechanged: true,
-		scrolled:    true,
 		lines:       []*line{},
 	}
 
@@ -573,7 +543,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		s.lines = []*line{newemptyline()}
 	}
 
-	s.render()
+	s.render(true)
 
 	/*
 	 * start editor main routine
@@ -610,26 +580,25 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.changeMode(insert)
 
 			case r == 'd':
-				s.moveXToRightEdgeCharIfNecessary()
-				curline := s.curline()
-				curidx := curline.charidx(s.x, s.xoffset)
-				removingNL := curidx == curline.length()-1
+				switch {
+				case s.xidx() == s.curline().length()-1:
+					// if x is at last, it's removing nl so concat current and next line.
+					s.joinlines(s.y, s.y+1)
 
-				if removingNL {
-					// if nl is removed, concat current and next line.
-					s.joinLines(s.y, s.y+1)
-				} else {
-					s.deleteCurrentChar()
-					s.x = s.calcx(curidx)
+				default:
+					s.delchar()
+					s.alignx()
 				}
 
 			case r == 'o':
-				s.insertline(down)
+				s.insline(down)
 				s.movecursor(down, 1)
+				s.x = 0
 				s.changeMode(insert)
 
 			case r == 'O':
-				s.insertline(up)
+				s.insline(up)
+				s.x = 0
 				s.changeMode(insert)
 
 			case r == 'h', isArrowKey && dir == left:
@@ -663,56 +632,37 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.movecursor(right, 1)
 
 			case r == 13: // Enter
-				s.moveXToRightEdgeCharIfNecessary()
+				curline := s.curline().copy()
+				nextline := s.curline().copy()
+				curidx := s.xidx()
 
-				curline := s.curline()
-				copy := curline.copy()
-				curidx := curline.charidx(s.x, s.xoffset)
+				s.clearline()
+				s.inscharsat(curline.buffer[:curidx], 0)
 
-				// cut current line
-				s.lines[s.y].buffer = append(curline.buffer[:curidx], newCharacter('\n'))
-
-				// insert line below
-				s.insertline(down)
-				s.lines[s.y+1].buffer = copy.buffer[curidx:]
+				s.insline(down)
 				s.movecursor(down, 1)
+				s.inscharsat(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
 				s.x = 0
-				if s.xoffset != 0 {
-					s.xoffset = 0
-					s.scrolled = true
-				}
 
 			case r == 127: // Backspace
-				s.moveXToRightEdgeCharIfNecessary()
-
-				curline := s.curline()
-				curidx := curline.charidx(s.x, s.xoffset)
-
-				switch {
-				case curidx == 0 && s.y == 0:
-					// already at the top. do nothing
-
-				case curidx == 0:
-					abovelinelen := s.lines[s.y-1].length()
-					s.joinLines(s.y, s.y-1)
-					s.movecursor(up, 1)
-					s.x = s.calcx(abovelinelen - 1)
-					if s.width-1 < s.x {
-						s.xoffset = s.x - s.width/2
-						s.x = s.x - s.xoffset
-						s.scrolled = true
+				switch s.xidx() {
+				case 0:
+					if s.y != 0 {
+						// join current and above line
+						// next x is right edge on the above line
+						nextx := s.lines[s.y-1].rightedge()
+						s.joinlines(s.y-1, s.y)
+						s.movecursor(up, 1)
+						s.x = nextx
 					}
 
 				default:
-					// delete the char
-					curline.deletechar(curidx - 1)
-					s.x = s.calcx(curidx - 1)
-					if s.x == 0 && s.xoffset != 0 {
-						s.xoffset--
-						s.x = 1
-						s.scrolled = true
-					}
-					s.changedlines = append(s.changedlines, s.y)
+					// just delete the char
+
+					// move cursor before deleting char to prevent
+					// the cursor points nowhere after deleting the rightmost char.
+					s.movecursor(left, 1)
+					s.delcharat(s.xidx() - 1)
 				}
 
 			case unicode.IsControl(r):
@@ -721,8 +671,8 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				}
 
 			default:
-				s.moveXToRightEdgeCharIfNecessary()
-				s.insertchar(newCharacter(r))
+				s.alignx()
+				s.inschars([]*character{newCharacter(r)})
 				s.movecursor(right, 1)
 			}
 
@@ -730,7 +680,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			panic("unknown mode")
 		}
 
-		s.render()
+		s.render(false)
 
 		if _debug {
 			s.debug()
