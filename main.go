@@ -25,6 +25,7 @@ type mode int
 const (
 	normal mode = iota + 1
 	insert
+	command
 )
 
 func (m mode) String() string {
@@ -33,6 +34,8 @@ func (m mode) String() string {
 		return "NOR"
 	case insert:
 		return "INS"
+	case command:
+		return "CMD"
 	default:
 		panic("unknown mode")
 	}
@@ -84,6 +87,10 @@ func (c *character) String() string {
 
 type line struct {
 	buffer []*character
+}
+
+func newcommandline() *line {
+	return newemptyline()
 }
 
 func newemptyline() *line {
@@ -160,6 +167,11 @@ func (l *line) delchar(at int) {
 	l.buffer = slices.Delete(l.buffer, at, at+1)
 }
 
+func (l *line) equal(s string) bool {
+	tmp := &line{l.buffer[:l.length()-1]}
+	return s == tmp.String()
+}
+
 func (l *line) copy() *line {
 	copy := &line{make([]*character, len(l.buffer))}
 	for i := range l.buffer {
@@ -170,6 +182,10 @@ func (l *line) copy() *line {
 
 func (l *line) clear() {
 	l.buffer = []*character{newCharacter('\n')}
+}
+
+func (l *line) empty() bool {
+	return l.length() == 1 && l.buffer[0].nl
 }
 
 func (l *line) cut(from, limit int) string {
@@ -197,6 +213,11 @@ type screen struct {
 	mode   mode
 	lines  []*line
 
+	cmdline *line
+	cmdx    int
+
+	errmsg *line
+
 	// current desired cursor position. might be different with the actual position.
 	x int
 	y int
@@ -210,6 +231,17 @@ type screen struct {
 	changedlines []int
 }
 
+func (s *screen) statlineidx() int {
+	// in turtle, the bottom line is command line,
+	// the second from bottom line is status line.
+	// s.height is set as (actual_height - 2) to preserve these lines.
+	return s.height
+}
+
+func (s *screen) cmdlineidx() int {
+	return s.height + 1
+}
+
 func (s *screen) changeMode(mode mode) {
 	s.mode = mode
 	s.modechanged = true
@@ -217,6 +249,14 @@ func (s *screen) changeMode(mode mode) {
 
 func (s *screen) statusline() *line {
 	return newline(fmt.Sprintf("mode: %v", s.mode))
+}
+
+func (s *screen) commandline() *line {
+	if s.mode != command {
+		return newemptyline()
+	}
+
+	return newline(fmt.Sprintf(":%v", s.cmdline))
 }
 
 func (s *screen) curline() *line {
@@ -310,9 +350,19 @@ func (s *screen) render(first bool) {
 
 	/* update status line */
 	if s.modechanged {
-		s.term.putcursor(0, s.height)
+		s.term.putcursor(0, s.statlineidx())
 		s.term.clearline()
 		fmt.Fprint(s.term, s.statusline().cut(0, s.width))
+	}
+
+	/* update command line */
+	s.term.putcursor(0, s.cmdlineidx())
+	if !s.errmsg.empty() {
+		s.term.clearline()
+		fmt.Fprint(s.term, s.errmsg.cut(0, s.width))
+	} else {
+		s.term.clearline()
+		fmt.Fprint(s.term, s.commandline().cut(0, s.width))
 	}
 
 	/* update texts */
@@ -346,7 +396,11 @@ func (s *screen) render(first bool) {
 		}
 	}
 
-	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
+	if s.mode == command {
+		s.term.putcursor(s.cmdx+1, s.cmdlineidx())
+	} else {
+		s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
+	}
 	s.actualx = x - s.xoffset
 	s.modechanged = false
 	s.changedlines = []int{}
@@ -360,6 +414,19 @@ const (
 	left
 	right
 )
+
+func (s *screen) movecmdcursor(direction direction) {
+	switch direction {
+	case left:
+		nextx := max(0, s.cmdxidx()-1)
+		s.cmdx = s.cmdline.widthto(nextx)
+	case right:
+		nextx := min(s.cmdline.length()-1, s.cmdxidx()+1)
+		s.cmdx = s.cmdline.widthto(nextx)
+	default:
+		panic("invalid direction is passed")
+	}
+}
 
 func (s *screen) movecursor(direction direction, cnt int) {
 	switch direction {
@@ -432,6 +499,10 @@ func (s *screen) xidx() int {
 	return s.curline().charidx(s.actualx, s.xoffset)
 }
 
+func (s *screen) cmdxidx() int {
+	return s.cmdline.charidx(s.cmdx, 0)
+}
+
 // ensure current s.x is pointing on the correct character position.
 // if x is too right after up/down move, fix x position.
 // if x is not aligning to the multi length character head, align there.
@@ -461,8 +532,8 @@ func (s *screen) clearline() {
 }
 
 func (s *screen) debug(msg ...string) {
-	debug("msg: %v, height: %v, width: %v, mode: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
-		msg, s.height, s.width, s.mode, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+	debug("msg: %v, height: %v, width: %v, mode: %v, cmdx: %v, cmdline: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
+		msg, s.height, s.width, s.mode, s.cmdx, s.cmdline, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
 }
 
 func main() {
@@ -525,6 +596,9 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		height:      row - 2,
 		width:       col,
 		mode:        normal,
+		cmdline:     newcommandline(),
+		cmdx:        0,
+		errmsg:      newemptyline(),
 		x:           0,
 		y:           0,
 		xoffset:     0,
@@ -551,6 +625,10 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 	reader := bufio.NewReader(input)
 	for {
+		// reset error message
+		// this keeps showing the error message just until the next input
+		s.errmsg = newemptyline()
+
 		// a unicode character takes 4 bytes at most
 		b := make([]byte, 4)
 		n, err := reader.Read(b)
@@ -571,8 +649,52 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 		isArrowKey, dir := isarrowkey(b)
 
 		switch s.mode {
+		case command:
+			switch {
+			case isArrowKey && dir == left:
+				s.movecmdcursor(left)
+
+			case isArrowKey && dir == right:
+				s.movecmdcursor(right)
+
+			case r == 27: // Esc
+				s.cmdline = newcommandline()
+				s.changeMode(normal)
+
+			case r == 127: // Backspace
+				s.movecmdcursor(left)
+				s.cmdline.delchar(s.cmdxidx())
+
+			case r == 13: // Enter
+				switch {
+				case s.cmdline.equal("q"):
+					s.cmdline = newcommandline()
+					s.cmdx = 0
+					goto finish
+
+				default:
+					s.cmdline = newcommandline()
+					s.cmdx = 0
+					s.errmsg = newline("unknown command!")
+					s.changeMode(normal)
+				}
+
+			case isArrowKey && dir == down:
+				// do nothing
+
+			case isArrowKey && dir == up:
+				// do nothing
+
+			default:
+				s.cmdline.inschars([]*character{newCharacter(r)}, s.cmdxidx())
+				s.movecmdcursor(right)
+			}
+
 		case normal:
 			switch {
+			case r == ':':
+				s.changeMode(command)
+
 			case r == ctrl('q'):
 				goto finish
 
@@ -616,9 +738,6 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 		case insert:
 			switch {
-			case r == 27: // Esc
-				s.changeMode(normal)
-
 			case isArrowKey && dir == left:
 				s.movecursor(left, 1)
 
@@ -630,6 +749,9 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			case isArrowKey && dir == right:
 				s.movecursor(right, 1)
+
+			case r == 27: // Esc
+				s.changeMode(normal)
 
 			case r == 13: // Enter
 				curline := s.curline().copy()
