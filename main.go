@@ -624,48 +624,32 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 	 */
 
 	reader := bufio.NewReader(input)
+
 	for {
 		// reset error message
 		// this keeps showing the error message just until the next input
 		s.errmsg = newemptyline()
 
-		// a unicode character takes 4 bytes at most
-		b := make([]byte, 4)
-		n, err := reader.Read(b)
-		if err == io.EOF {
-			continue
-		}
-
-		if n == -1 {
-			panic("cannot read")
-		}
-
-		if err != nil {
-			panic(err)
-		}
-
-		r, _ := utf8.DecodeRune(b)
-
-		isArrowKey, dir := isarrowkey(b)
+		input := read(reader)
 
 		switch s.mode {
 		case command:
-			switch {
-			case isArrowKey && dir == left:
+			switch input.special {
+			case _left:
 				s.movecmdcursor(left)
 
-			case isArrowKey && dir == right:
+			case _right:
 				s.movecmdcursor(right)
 
-			case r == 27: // Esc
+			case _esc:
 				s.cmdline = newcommandline()
 				s.changeMode(normal)
 
-			case r == 127: // Backspace
+			case _bs:
 				s.movecmdcursor(left)
 				s.cmdline.delchar(s.cmdxidx())
 
-			case r == 13: // Enter
+			case _cr:
 				switch {
 				case s.cmdline.equal("q"):
 					s.cmdline = newcommandline()
@@ -679,81 +663,98 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					s.changeMode(normal)
 				}
 
-			case isArrowKey && dir == down:
-				// do nothing
-
-			case isArrowKey && dir == up:
-				// do nothing
-
-			default:
-				s.cmdline.inschars([]*character{newCharacter(r)}, s.cmdxidx())
+			case _not_special_key:
+				s.cmdline.inschars([]*character{newCharacter(input.r)}, s.cmdxidx())
 				s.movecmdcursor(right)
 			}
 
 		case normal:
-			switch {
-			case r == ':':
-				s.changeMode(command)
-
-			case r == ctrl('q'):
+			switch input.special {
+			case _ctrl_q:
 				goto finish
 
-			case r == 'i':
-				s.changeMode(insert)
-
-			case r == 'd':
-				switch {
-				case s.xidx() == s.curline().length()-1:
-					// if x is at last, it's removing nl so concat current and next line.
-					s.joinlines(s.y, s.y+1)
-
-				default:
-					s.delchar()
-					s.alignx()
-				}
-
-			case r == 'o':
-				s.insline(down)
-				s.movecursor(down, 1)
-				s.x = 0
-				s.changeMode(insert)
-
-			case r == 'O':
-				s.insline(up)
-				s.x = 0
-				s.changeMode(insert)
-
-			case r == 'h', isArrowKey && dir == left:
+			case _left:
 				s.movecursor(left, 1)
 
-			case r == 'j', isArrowKey && dir == down:
+			case _down:
 				s.movecursor(down, 1)
 
-			case r == 'k', isArrowKey && dir == up:
+			case _up:
 				s.movecursor(up, 1)
 
-			case r == 'l', isArrowKey && dir == right:
+			case _right:
 				s.movecursor(right, 1)
+
+			case _not_special_key:
+				switch input.r {
+				case ':':
+					s.changeMode(command)
+
+				case 'i':
+					s.changeMode(insert)
+
+				case 'd':
+					switch {
+					case s.xidx() == s.curline().length()-1:
+						// if x is at last, it's removing nl so concat current and next line.
+						s.joinlines(s.y, s.y+1)
+
+					default:
+						s.delchar()
+						s.alignx()
+					}
+
+				case 'o':
+					s.insline(down)
+					s.movecursor(down, 1)
+					s.x = 0
+					s.changeMode(insert)
+
+				case 'O':
+					s.insline(up)
+					s.x = 0
+					s.changeMode(insert)
+
+				/*
+				 * goto mode
+				 */
+				case 'g':
+					// input := read()
+					// switch
+
+				case 'h':
+					s.movecursor(left, 1)
+
+				case 'j':
+					s.movecursor(down, 1)
+
+				case 'k':
+					s.movecursor(up, 1)
+
+				case 'l':
+					s.movecursor(right, 1)
+				}
+
 			}
 
 		case insert:
-			switch {
-			case isArrowKey && dir == left:
+			switch input.special {
+			case _left:
 				s.movecursor(left, 1)
 
-			case isArrowKey && dir == down:
+			case _down:
 				s.movecursor(down, 1)
 
-			case isArrowKey && dir == up:
+			case _up:
 				s.movecursor(up, 1)
 
-			case isArrowKey && dir == right:
+			case _right:
 				s.movecursor(right, 1)
 
-			case r == 27: // Esc
+			case _esc:
 				s.changeMode(normal)
 
-			case r == 13: // Enter
+			case _cr:
 				curline := s.curline().copy()
 				nextline := s.curline().copy()
 				curidx := s.xidx()
@@ -766,7 +767,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.inscharsat(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
 				s.x = 0
 
-			case r == 127: // Backspace
+			case _bs:
 				switch s.xidx() {
 				case 0:
 					if s.y != 0 {
@@ -787,14 +788,9 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					s.delcharat(s.xidx() - 1)
 				}
 
-			case unicode.IsControl(r):
-				if _debug {
-					debug("control key is pressed: %v\n", r)
-				}
-
-			default:
+			case _not_special_key:
 				s.alignx()
-				s.inschars([]*character{newCharacter(r)})
+				s.inschars([]*character{newCharacter(input.r)})
 				s.movecursor(right, 1)
 			}
 
@@ -815,25 +811,315 @@ finish:
 	term.putcursor(0, 0)
 }
 
-func isarrowkey(bs []byte) (bool, direction) {
-	if bs[0] != '\x1b' || bs[1] != '[' {
-		return false, 0
+/*
+ * keys
+ */
+
+type input struct {
+	r       rune
+	special key
+}
+
+func (i *input) String() string {
+	if i.special == _not_special_key {
+		return fmt.Sprintf("%v", string(i.r))
+	}
+	return fmt.Sprintf("%v", i.special)
+}
+
+type key int
+
+func (k key) String() string {
+	switch k {
+	case _not_special_key:
+		return "not_special_key"
+	case _unknown:
+		return "unknown"
+	case _lf:
+		return "LF"
+	case _cr:
+		return "CR"
+	case _tab:
+		return "TAB"
+	case _esc:
+		return "ESC"
+	case _bs:
+		return "BackSpace"
+	case _del:
+		return "Delete"
+	case _up:
+		return "↑"
+	case _down:
+		return "↓"
+	case _right:
+		return "→"
+	case _left:
+		return "←"
+	case _home:
+		return "Home"
+	case _end:
+		return "End"
+	case _insert:
+		return "Insert"
+	case _delete:
+		return "Delete"
+	case _pageup:
+		return "PageUp"
+	case _pagedown:
+		return "PageDown"
+	case _ctrl_a:
+		return "Ctrl+a"
+	case _ctrl_b:
+		return "Ctrl+b"
+	case _ctrl_c:
+		return "Ctrl+c"
+	case _ctrl_d:
+		return "Ctrl+d"
+	case _ctrl_e:
+		return "Ctrl+e"
+	case _ctrl_f:
+		return "Ctrl+f"
+	case _ctrl_g:
+		return "Ctrl+g"
+	case _ctrl_h:
+		return "Ctrl+h"
+	case _ctrl_i:
+		return "Ctrl+i"
+	case _ctrl_j:
+		return "Ctrl+j"
+	case _ctrl_k:
+		return "Ctrl+k"
+	case _ctrl_l:
+		return "Ctrl+l"
+	case _ctrl_m:
+		return "Ctrl+m"
+	case _ctrl_n:
+		return "Ctrl+n"
+	case _ctrl_o:
+		return "Ctrl+o"
+	case _ctrl_p:
+		return "Ctrl+p"
+	case _ctrl_q:
+		return "Ctrl+q"
+	case _ctrl_r:
+		return "Ctrl+r"
+	case _ctrl_s:
+		return "Ctrl+s"
+	case _ctrl_t:
+		return "Ctrl+t"
+	case _ctrl_u:
+		return "Ctrl+u"
+	case _ctrl_v:
+		return "Ctrl+v"
+	case _ctrl_w:
+		return "Ctrl+w"
+	case _ctrl_x:
+		return "Ctrl+x"
+	case _ctrl_y:
+		return "Ctrl+y"
+	case _ctrl_z:
+		return "Ctrl+z"
+	default:
+		panic("unknown key")
+	}
+}
+
+const (
+	_not_special_key key = iota
+	_unknown             // special key but could not handle
+	_lf
+	_cr
+	_tab
+	_esc
+	_bs
+	_del
+
+	// arrow
+	_up
+	_down
+	_right
+	_left
+
+	_home
+	_end
+	_insert
+	_delete
+	_pageup
+	_pagedown
+
+	_ctrl_a
+	_ctrl_b
+	_ctrl_c
+	_ctrl_d
+	_ctrl_e
+	_ctrl_f
+	_ctrl_g
+	_ctrl_h
+	_ctrl_i
+	_ctrl_j
+	_ctrl_k
+	_ctrl_l
+	_ctrl_m
+	_ctrl_n
+	_ctrl_o
+	_ctrl_p
+	_ctrl_q
+	_ctrl_r
+	_ctrl_s
+	_ctrl_t
+	_ctrl_u
+	_ctrl_v
+	_ctrl_w
+	_ctrl_x
+	_ctrl_y
+	_ctrl_z
+)
+
+func read(reader *bufio.Reader) (i *input) {
+	var dbg []byte
+
+	defer func() {
+		if i.special == _unknown {
+			debug("read: unknown input detected: %v\n", string(dbg))
+		}
+	}()
+
+	first, err := reader.ReadByte()
+	if err != nil {
+		panic(err)
 	}
 
-	switch bs[2] {
-	case 'A':
-		return true, up
-	case 'B':
-		return true, down
-	case 'C':
-		return true, right
-	case 'D':
-		return true, left
+	dbg = append(dbg, first)
 
-		// todo: handle other keys
+	buffered := reader.Buffered()
+
+	if first != 0x1b {
+		buf := make([]byte, buffered)
+		if buffered != 0 {
+			_, err := reader.Read(buf)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		dbg = append(dbg, buf...)
+		r, _ := utf8.DecodeRune(append([]byte{first}, buf...))
+
+		switch r {
+		case '\r':
+			return &input{special: _cr}
+		case '\t':
+			return &input{special: _tab}
+		case 127:
+			return &input{special: _bs}
+		default:
+			if r < 32 {
+				switch r {
+				case 1:
+					return &input{special: _ctrl_a}
+				case 2:
+					return &input{special: _ctrl_b}
+				case 3:
+					return &input{special: _ctrl_c}
+				case 4:
+					return &input{special: _ctrl_d}
+				case 5:
+					return &input{special: _ctrl_e}
+				case 6:
+					return &input{special: _ctrl_f}
+				case 7:
+					return &input{special: _ctrl_g}
+				case 8:
+					return &input{special: _ctrl_h}
+				case 9:
+					return &input{special: _ctrl_i}
+				case 10:
+					return &input{special: _ctrl_j}
+				case 11:
+					return &input{special: _ctrl_k}
+				case 12:
+					return &input{special: _ctrl_l}
+				case 13:
+					return &input{special: _ctrl_m}
+				case 14:
+					return &input{special: _ctrl_n}
+				case 15:
+					return &input{special: _ctrl_o}
+				case 16:
+					return &input{special: _ctrl_p}
+				case 17:
+					return &input{special: _ctrl_q}
+				case 18:
+					return &input{special: _ctrl_r}
+				case 19:
+					return &input{special: _ctrl_s}
+				case 20:
+					return &input{special: _ctrl_t}
+				case 21:
+					return &input{special: _ctrl_u}
+				case 22:
+					return &input{special: _ctrl_v}
+				case 23:
+					return &input{special: _ctrl_w}
+				case 24:
+					return &input{special: _ctrl_x}
+				case 25:
+					return &input{special: _ctrl_y}
+				case 26:
+					return &input{special: _ctrl_z}
+				}
+			}
+			return &input{r: r}
+		}
 	}
 
-	panic("unknown key came as arrow key")
+	// when first byte is 0x1b but no more bytes buffered,
+	// it's just [0x1b] input which is esc key.
+	if buffered == 0 {
+		return &input{special: _esc}
+	}
+
+	// escape sequence
+	buf := make([]byte, buffered)
+	n, err := reader.Read(buf)
+	if err != nil {
+		panic(err)
+	}
+	dbg = append(dbg, buf...)
+
+	if buf[0] == '[' {
+		switch n {
+		case 2:
+			switch buf[1] {
+			case 'A':
+				return &input{special: _up}
+			case 'B':
+				return &input{special: _down}
+			case 'C':
+				return &input{special: _right}
+			case 'D':
+				return &input{special: _left}
+			case 'H':
+				return &input{special: _home}
+			case 'F':
+				return &input{special: _end}
+			}
+
+		case 3:
+			switch {
+			case buf[1] == '2' && buf[2] == '~':
+				return &input{special: _insert}
+			case buf[1] == '3' && buf[2] == '~':
+				return &input{special: _delete}
+			case buf[1] == '5' && buf[2] == '~':
+				return &input{special: _pageup}
+			case buf[1] == '6' && buf[2] == '~':
+				return &input{special: _pagedown}
+			}
+		}
+	}
+
+	return &input{special: _unknown}
 }
 
 func debug(format string, a ...any) (int, error) {
