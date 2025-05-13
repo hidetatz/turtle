@@ -634,11 +634,11 @@ func editor(term terminal, text io.Reader, r io.Reader) {
 		// this keeps showing the error message just until the next input
 		s.errmsg = newemptyline()
 
-		input := _read()
+		buff := _read()
 
 		switch s.mode {
 		case command:
-			switch input.special {
+			switch buff.special {
 			case _left:
 				s.movecmdcursor(left)
 
@@ -668,12 +668,12 @@ func editor(term terminal, text io.Reader, r io.Reader) {
 				}
 
 			case _not_special_key:
-				s.cmdline.inschars([]*character{newCharacter(input.r)}, s.cmdxidx())
+				s.cmdline.inschars([]*character{newCharacter(buff.r)}, s.cmdxidx())
 				s.movecmdcursor(right)
 			}
 
 		case normal:
-			switch input.special {
+			switch buff.special {
 			case _left:
 				s.movecursor(left, 1)
 
@@ -687,7 +687,7 @@ func editor(term terminal, text io.Reader, r io.Reader) {
 				s.movecursor(right, 1)
 
 			case _not_special_key:
-				switch input.r {
+				switch buff.r {
 				case ':':
 					s.changemode(command)
 
@@ -739,7 +739,7 @@ func editor(term terminal, text io.Reader, r io.Reader) {
 			}
 
 		case insert:
-			switch input.special {
+			switch buff.special {
 			case _left:
 				s.movecursor(left, 1)
 
@@ -791,7 +791,7 @@ func editor(term terminal, text io.Reader, r io.Reader) {
 
 			case _not_special_key:
 				s.alignx()
-				s.inschars([]*character{newCharacter(input.r)})
+				s.inschars([]*character{newCharacter(buff.r)})
 				s.movecursor(right, 1)
 			}
 
