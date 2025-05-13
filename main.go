@@ -242,7 +242,7 @@ func (s *screen) cmdlineidx() int {
 	return s.height + 1
 }
 
-func (s *screen) changeMode(mode mode) {
+func (s *screen) changemode(mode mode) {
 	s.mode = mode
 	s.modechanged = true
 }
@@ -643,7 +643,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 			case _esc:
 				s.cmdline = newcommandline()
-				s.changeMode(normal)
+				s.changemode(normal)
 
 			case _bs:
 				s.movecmdcursor(left)
@@ -660,7 +660,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					s.cmdline = newcommandline()
 					s.cmdx = 0
 					s.errmsg = newline("unknown command!")
-					s.changeMode(normal)
+					s.changemode(normal)
 				}
 
 			case _not_special_key:
@@ -670,9 +670,6 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 
 		case normal:
 			switch input.special {
-			case _ctrl_q:
-				goto finish
-
 			case _left:
 				s.movecursor(left, 1)
 
@@ -688,10 +685,10 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 			case _not_special_key:
 				switch input.r {
 				case ':':
-					s.changeMode(command)
+					s.changemode(command)
 
 				case 'i':
-					s.changeMode(insert)
+					s.changemode(insert)
 
 				case 'd':
 					switch {
@@ -708,12 +705,12 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 					s.insline(down)
 					s.movecursor(down, 1)
 					s.x = 0
-					s.changeMode(insert)
+					s.changemode(insert)
 
 				case 'O':
 					s.insline(up)
 					s.x = 0
-					s.changeMode(insert)
+					s.changemode(insert)
 
 				/*
 				 * goto mode
@@ -752,7 +749,7 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 				s.movecursor(right, 1)
 
 			case _esc:
-				s.changeMode(normal)
+				s.changemode(normal)
 
 			case _cr:
 				curline := s.curline().copy()
