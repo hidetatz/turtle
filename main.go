@@ -396,7 +396,7 @@ func (s *screen) render(first bool) {
 	s.changedlines = []int{}
 }
 
-func (s *screen) handle(mode mode, buff *input, reader *bufio.Reader) {
+func (s *screen) handle(mode mode, buff *input, reader *reader) {
 	switch mode {
 	case normal:
 		switch buff.special {
@@ -442,7 +442,7 @@ func (s *screen) handle(mode mode, buff *input, reader *bufio.Reader) {
 			 * goto mode
 			 */
 			case 'g':
-				input2 := read(reader)
+				input2 := reader.read()
 				switch input2.r {
 				case 'g':
 					s.gototopleft()
@@ -683,6 +683,10 @@ func (s *screen) debug(msg ...string) {
 		msg, s.height, s.width, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
 }
 
+/*
+ * editor
+ */
+
 type editor struct {
 	term    terminal
 	height  int
@@ -788,18 +792,14 @@ func (e *editor) start(in, buff io.Reader) {
 	 * start editor main routine
 	 */
 
-	reader := bufio.NewReader(in)
-
-	_read := func() *input {
-		return read(reader)
-	}
+	reader := &reader{r: bufio.NewReader(in)}
 
 	for {
 		// reset error message
 		// this keeps showing the error message just until the next input
 		e.errmsg = newemptyline()
 
-		buff := _read()
+		buff := reader.read()
 
 		switch e.mode {
 		case command:
@@ -910,7 +910,7 @@ func main() {
 }
 
 /*
- * keys
+ * keypress
  */
 
 type input struct {
@@ -1073,7 +1073,11 @@ const (
 	_ctrl_z
 )
 
-func read(reader *bufio.Reader) (i *input) {
+type reader struct {
+	r *bufio.Reader
+}
+
+func (r *reader) read() (i *input) {
 	var dbg []byte
 
 	defer func() {
@@ -1082,19 +1086,19 @@ func read(reader *bufio.Reader) (i *input) {
 		}
 	}()
 
-	first, err := reader.ReadByte()
+	first, err := r.r.ReadByte()
 	if err != nil {
 		panic(err)
 	}
 
 	dbg = append(dbg, first)
 
-	buffered := reader.Buffered()
+	buffered := r.r.Buffered()
 
 	if first != 0x1b {
 		buf := make([]byte, buffered)
 		if buffered != 0 {
-			_, err := reader.Read(buf)
+			_, err := r.r.Read(buf)
 			if err != nil {
 				panic(err)
 			}
@@ -1179,7 +1183,7 @@ func read(reader *bufio.Reader) (i *input) {
 
 	// escape sequence
 	buf := make([]byte, buffered)
-	n, err := reader.Read(buf)
+	n, err := r.r.Read(buf)
 	if err != nil {
 		panic(err)
 	}
