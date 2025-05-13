@@ -25,6 +25,7 @@ By default, turtle editor is in normal mode.
 ### normal mode
 
 * `i`: enter insert mode
+* `:`: enter command mode
 * `h`: move left
 * `j`: move down
 * `k`: move up
@@ -32,6 +33,17 @@ By default, turtle editor is in normal mode.
 * `o`: insert a line **below** the current cursor, then enter insert mode
 * `O`: insert a line **above** the current cursor, then enter insert mode
 * `d`: delete a character
+* `gg`: move to the text head
+* `ge`: move to the text bottom
+* `gh`: move to the current line head
+* `gl`: move to the current line tail
+* `gs`: move to the current line head where non-space character exists
+
+### command mode
+
+Every command is executed after Enter keypress.
+
+* `q`: close the editor
 
 ### insert mode
 

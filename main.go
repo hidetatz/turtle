@@ -77,6 +77,10 @@ func (c *character) copy() *character {
 	return &character{c.r, c.tab, c.nl, c.width, c.str}
 }
 
+func (c *character) isspace() bool {
+	return c.r == ' ' || c.tab
+}
+
 func (c *character) String() string {
 	return c.str
 }
@@ -313,21 +317,38 @@ func (s *screen) render(first bool) {
 
 	ypad := 4
 	yok := func() direction {
-		// too high, scroll up
-		if s.y-ypad < s.yoffset {
-			if s.y < ypad {
-				// too high but no enough space above
+		padup := s.y - s.yoffset
+		paddown := (s.yoffset + s.height - 1) - s.y
+
+		// cursor has up and down padding, it's ok
+		if padup >= ypad && paddown >= ypad {
+			return 0
+		}
+
+		// up scroll needed
+		if padup < ypad {
+			// if y cursor is not shown, scroll up. This happens after some goto cmd.
+			if padup < 0 {
+				return up
+			}
+
+			// no enough pad above but cannot scroll up more, stop.
+			if s.yoffset == 0 {
 				return 0
 			}
+
 			return up
 		}
 
-		// too low, scroll down
-		if s.yoffset+s.height-1 < s.y+ypad {
-			if len(s.lines)-1 < s.y+ypad {
-				// too low but no enough space below
+		if paddown < ypad {
+			if paddown < 0 {
+				return down
+			}
+
+			if s.yoffset+s.height == len(s.lines) {
 				return 0
 			}
+
 			return down
 		}
 
@@ -447,6 +468,34 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	default:
 		panic("invalid direction is passed")
 	}
+}
+
+func (s *screen) gototopleft() {
+	s.x, s.y = 0, 0
+}
+
+func (s *screen) gotobottomleft() {
+	s.x, s.y = 0, len(s.lines)-1
+}
+
+func (s *screen) gotolinebottom() {
+	s.x = s.curline().width() - 1
+}
+
+func (s *screen) gotolineheadch() {
+	x := 0
+	curline := s.curline()
+	for i := range curline.buffer {
+		if !curline.buffer[i].isspace() {
+			break
+		}
+		x += curline.buffer[i].width
+	}
+	s.x = x
+}
+
+func (s *screen) gotolinehead() {
+	s.x = 0
 }
 
 // insert a line
@@ -720,8 +769,28 @@ func editor(term terminal, text io.Reader, r io.Reader) {
 				 * goto mode
 				 */
 				case 'g':
-					// input := read()
-					// switch
+					input2 := _read()
+					switch input2.r {
+					case 'g':
+						s.gototopleft()
+
+					case 'e':
+						s.gotobottomleft()
+
+					case 'l':
+						s.gotolinebottom()
+
+					case 's':
+						// move to (first non space character index on curren line, currentline)
+						s.gotolineheadch()
+
+					case 'h':
+						// move to (0, currentline)
+						s.gotolinehead()
+
+					default:
+						// do nothing
+					}
 
 				case 'h':
 					s.movecursor(left, 1)
