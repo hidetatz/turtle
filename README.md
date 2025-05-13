@@ -8,14 +8,20 @@ turtle editor
 go build -o tt main.go
 ```
 
+### install
+
+```shell
+go build -o tt main.go && mv ./tt $(go env GOPATH)/bin/tt
+```
+
 ### run
 
 ```shell
 # run with empty buffer
-./tt
+tt
 
 # open and edit a file
-./tt test.txt
+tt test.txt
 ```
 
 ## keymaps
@@ -67,7 +73,7 @@ Logs put via debug() are written to stderr as stdout is used by the editor itsel
 
 ```shell
 # run with stderr redirected to another file
-TURTLE_DEBUG=1 ./tt test.txt 2>log.txt
+TURTLE_DEBUG=1 tt test.txt 2>log.txt
 
 # on another terminal, tail it
 tail -f log.txt
