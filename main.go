@@ -212,55 +212,46 @@ func (l *line) cut(from, limit int) string {
 
 type screen struct {
 	term   terminal
-	height int
 	width  int
-	mode   mode
+	height int
 	lines  []*line
-
-	cmdline *line
-	cmdx    int
-
-	errmsg *line
 
 	// current desired cursor position. might be different with the actual position.
 	x int
 	y int
 
-	// terminal state
 	actualx int
 	xoffset int
 	yoffset int
 
-	modechanged  bool
 	changedlines []int
+	changemode   func(mode mode)
 }
 
-func (s *screen) statlineidx() int {
-	// in turtle, the bottom line is command line,
-	// the second from bottom line is status line.
-	// s.height is set as (actual_height - 2) to preserve these lines.
-	return s.height
-}
-
-func (s *screen) cmdlineidx() int {
-	return s.height + 1
-}
-
-func (s *screen) changemode(mode mode) {
-	s.mode = mode
-	s.modechanged = true
-}
-
-func (s *screen) statusline() *line {
-	return newline(fmt.Sprintf("mode: %v", s.mode))
-}
-
-func (s *screen) commandline() *line {
-	if s.mode != command {
-		return newemptyline()
+func newscreen(term terminal, width, height int, buff io.Reader, changemode func(mode mode)) *screen {
+	s := &screen{
+		term:       term,
+		height:     height,
+		width:      width,
+		x:          0,
+		y:          0,
+		xoffset:    0,
+		yoffset:    0,
+		lines:      []*line{},
+		changemode: changemode,
 	}
 
-	return newline(fmt.Sprintf(":%v", s.cmdline))
+	scanner := bufio.NewScanner(buff)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.lines = append(s.lines, newline(line))
+	}
+
+	if len(s.lines) == 0 {
+		s.lines = []*line{newemptyline()}
+	}
+
+	return s
 }
 
 func (s *screen) curline() *line {
@@ -369,23 +360,6 @@ func (s *screen) render(first bool) {
 		scrolled = true
 	}
 
-	/* update status line */
-	if s.modechanged {
-		s.term.putcursor(0, s.statlineidx())
-		s.term.clearline()
-		fmt.Fprint(s.term, s.statusline().cut(0, s.width))
-	}
-
-	/* update command line */
-	s.term.putcursor(0, s.cmdlineidx())
-	if !s.errmsg.empty() {
-		s.term.clearline()
-		fmt.Fprint(s.term, s.errmsg.cut(0, s.width))
-	} else {
-		s.term.clearline()
-		fmt.Fprint(s.term, s.commandline().cut(0, s.width))
-	}
-
 	/* update texts */
 	if scrolled || first {
 		// update all lines
@@ -417,14 +391,155 @@ func (s *screen) render(first bool) {
 		}
 	}
 
-	if s.mode == command {
-		s.term.putcursor(s.cmdx+1, s.cmdlineidx())
-	} else {
-		s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
-	}
+	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
 	s.actualx = x - s.xoffset
-	s.modechanged = false
 	s.changedlines = []int{}
+}
+
+func (s *screen) handle(mode mode, buff *input, reader *bufio.Reader) {
+	switch mode {
+	case normal:
+		switch buff.special {
+		case _left:
+			s.movecursor(left, 1)
+
+		case _down:
+			s.movecursor(down, 1)
+
+		case _up:
+			s.movecursor(up, 1)
+
+		case _right:
+			s.movecursor(right, 1)
+
+		case _not_special_key:
+			switch buff.r {
+			case 'd':
+				switch {
+				case s.xidx() == s.curline().length()-1:
+					if s.y+1 < len(s.lines) {
+						// if x is at last, it's removing nl so concat current and next line.
+						s.joinlines(s.y, s.y+1)
+					}
+
+				default:
+					s.delchar()
+					s.alignx()
+				}
+
+			case 'o':
+				s.insline(down)
+				s.movecursor(down, 1)
+				s.x = 0
+				s.changemode(insert)
+
+			case 'O':
+				s.insline(up)
+				s.x = 0
+				s.changemode(insert)
+
+			/*
+			 * goto mode
+			 */
+			case 'g':
+				input2 := read(reader)
+				switch input2.r {
+				case 'g':
+					s.gototopleft()
+
+				case 'e':
+					s.gotobottomleft()
+
+				case 'l':
+					s.gotolinebottom()
+
+				case 's':
+					// move to (first non space character index on curren line, currentline)
+					s.gotolineheadch()
+
+				case 'h':
+					// move to (0, currentline)
+					s.gotolinehead()
+
+				default:
+					// do nothing
+				}
+
+			case 'h':
+				s.movecursor(left, 1)
+
+			case 'j':
+				s.movecursor(down, 1)
+
+			case 'k':
+				s.movecursor(up, 1)
+
+			case 'l':
+				s.movecursor(right, 1)
+			}
+
+		}
+
+	case insert:
+		switch buff.special {
+		case _left:
+			s.movecursor(left, 1)
+
+		case _down:
+			s.movecursor(down, 1)
+
+		case _up:
+			s.movecursor(up, 1)
+
+		case _right:
+			s.movecursor(right, 1)
+
+		case _esc:
+			s.changemode(normal)
+
+		case _cr:
+			curline := s.curline().copy()
+			nextline := s.curline().copy()
+			curidx := s.xidx()
+
+			s.clearline()
+			s.inscharsat(curline.buffer[:curidx], 0)
+
+			s.insline(down)
+			s.movecursor(down, 1)
+			s.inscharsat(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
+			s.x = 0
+
+		case _bs:
+			switch s.xidx() {
+			case 0:
+				if s.y != 0 {
+					// join current and above line
+					// next x is right edge on the above line
+					nextx := s.lines[s.y-1].rightedge()
+					s.joinlines(s.y-1, s.y)
+					s.movecursor(up, 1)
+					s.x = nextx
+				}
+
+			default:
+				// just delete the char
+
+				// move cursor before deleting char to prevent
+				// the cursor points nowhere after deleting the rightmost char.
+				s.movecursor(left, 1)
+				s.delcharat(s.xidx() - 1)
+			}
+
+		case _not_special_key:
+			s.alignx()
+			s.inschars([]*character{newCharacter(buff.r)})
+			s.movecursor(right, 1)
+		}
+
+	default:
+		panic(fmt.Sprintf("cannot handle mode %v", mode))
+	}
 }
 
 type direction int
@@ -435,19 +550,6 @@ const (
 	left
 	right
 )
-
-func (s *screen) movecmdcursor(direction direction) {
-	switch direction {
-	case left:
-		nextx := max(0, s.cmdxidx()-1)
-		s.cmdx = s.cmdline.widthto(nextx)
-	case right:
-		nextx := min(s.cmdline.length()-1, s.cmdxidx()+1)
-		s.cmdx = s.cmdline.widthto(nextx)
-	default:
-		panic("invalid direction is passed")
-	}
-}
 
 func (s *screen) movecursor(direction direction, cnt int) {
 	switch direction {
@@ -548,10 +650,6 @@ func (s *screen) xidx() int {
 	return s.curline().charidx(s.actualx, s.xoffset)
 }
 
-func (s *screen) cmdxidx() int {
-	return s.cmdline.charidx(s.cmdx, 0)
-}
-
 // ensure current s.x is pointing on the correct character position.
 // if x is too right after up/down move, fix x position.
 // if x is not aligning to the multi length character head, align there.
@@ -581,8 +679,200 @@ func (s *screen) clearline() {
 }
 
 func (s *screen) debug(msg ...string) {
-	debug("msg: %v, height: %v, width: %v, mode: %v, cmdx: %v, cmdline: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
-		msg, s.height, s.width, s.mode, s.cmdx, s.cmdline, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+	debug("msg: %v, height: %v, width: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
+		msg, s.height, s.width, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+}
+
+type editor struct {
+	term    terminal
+	height  int
+	width   int
+	mode    mode
+	cmdline *line
+	cmdx    int
+	errmsg  *line
+	s       *screen
+}
+
+func neweditor(term terminal) *editor {
+	return &editor{term: term}
+}
+
+func (e *editor) changemode(mode mode) {
+	e.mode = mode
+}
+
+func (e *editor) movecmdcursor(direction direction) {
+	switch direction {
+	case left:
+		nextx := max(0, e.cmdxidx()-1)
+		e.cmdx = e.cmdline.widthto(nextx)
+	case right:
+		nextx := min(e.cmdline.length()-1, e.cmdxidx()+1)
+		e.cmdx = e.cmdline.widthto(nextx)
+	default:
+		panic("invalid direction is passed")
+	}
+}
+
+func (e *editor) cmdxidx() int {
+	return e.cmdline.charidx(e.cmdx, 0)
+}
+
+func (e *editor) statusline() *line {
+	return newline(fmt.Sprintf("mode: %v", e.mode))
+}
+
+func (e *editor) commandline() *line {
+	if e.mode != command {
+		return newemptyline()
+	}
+
+	return newline(fmt.Sprintf(":%v", e.cmdline))
+}
+
+func (e *editor) render(first bool) {
+	// render status line
+	e.term.putcursor(0, e.height-2)
+	e.term.clearline()
+	fmt.Fprint(e.term, e.statusline().cut(0, e.width))
+
+	/* update command line */
+	e.term.putcursor(0, e.height-1)
+	if !e.errmsg.empty() {
+		e.term.clearline()
+		fmt.Fprint(e.term, e.errmsg.cut(0, e.width))
+	} else {
+		e.term.clearline()
+		fmt.Fprint(e.term, e.commandline().cut(0, e.width))
+	}
+
+	e.s.render(first)
+
+	if e.mode == command {
+		e.term.putcursor(e.cmdx+1, e.height-1)
+	}
+}
+
+func (e *editor) start(in, buff io.Reader) {
+	fin, err := e.term.init()
+	if err != nil {
+		fin()
+		panic(err)
+	}
+
+	defer fin()
+	defer e.term.refresh()
+
+	e.term.refresh()
+
+	/*
+	 * Prepare editor state
+	 */
+
+	height, width, err := e.term.windowsize()
+	if err != nil {
+		panic(err)
+	}
+
+	e.width = width
+	e.height = height
+	e.mode = normal
+	e.cmdline = newemptyline()
+	e.cmdx = 0
+	e.errmsg = newemptyline()
+	e.s = newscreen(e.term, e.width, e.height-2, buff, func(mode mode) { e.mode = mode })
+	e.render(true)
+
+	/*
+	 * start editor main routine
+	 */
+
+	reader := bufio.NewReader(in)
+
+	_read := func() *input {
+		return read(reader)
+	}
+
+	for {
+		// reset error message
+		// this keeps showing the error message just until the next input
+		e.errmsg = newemptyline()
+
+		buff := _read()
+
+		switch e.mode {
+		case command:
+			switch buff.special {
+			case _left:
+				e.movecmdcursor(left)
+
+			case _right:
+				e.movecmdcursor(right)
+
+			case _esc:
+				e.cmdline = newcommandline()
+				e.changemode(normal)
+
+			case _bs:
+				if 0 < e.cmdx {
+					e.movecmdcursor(left)
+					e.cmdline.delchar(e.cmdxidx())
+				}
+
+			case _cr:
+				switch {
+				case e.cmdline.equal("q"):
+					e.cmdline = newcommandline()
+					e.cmdx = 0
+					goto finish
+
+				default:
+					e.cmdline = newcommandline()
+					e.cmdx = 0
+					e.errmsg = newline("unknown command!")
+					e.changemode(normal)
+				}
+
+			case _not_special_key:
+				e.cmdline.inschars([]*character{newCharacter(buff.r)}, e.cmdxidx())
+				e.movecmdcursor(right)
+			}
+
+		case normal:
+			switch buff.special {
+			case _not_special_key:
+				switch buff.r {
+				case ':':
+					e.changemode(command)
+				case 'i':
+					e.changemode(insert)
+				default:
+					e.s.handle(e.mode, buff, reader)
+				}
+			default:
+				e.s.handle(e.mode, buff, reader)
+			}
+
+		case insert:
+			switch buff.special {
+			case _esc:
+				e.changemode(normal)
+			default:
+				e.s.handle(e.mode, buff, reader)
+			}
+
+		default:
+			e.s.handle(e.mode, buff, reader)
+		}
+
+		e.render(false)
+	}
+
+finish:
+	e.term.refresh()
+	fmt.Fprintf(os.Stdout, "\n")
+	e.term.putcursor(0, 0)
 }
 
 func main() {
@@ -615,270 +905,8 @@ func main() {
 		return
 	}
 
-	term := &unixVT100term{}
-	editor(term, r, os.Stdin)
-}
-
-func editor(term terminal, text io.Reader, r io.Reader) {
-	fin, err := term.init()
-	if err != nil {
-		fin()
-		panic(err)
-	}
-
-	defer fin()
-	defer term.refresh()
-
-	term.refresh()
-
-	/*
-	 * Prepare editor state
-	 */
-
-	row, col, err := term.windowsize()
-	if err != nil {
-		panic(err)
-	}
-
-	s := &screen{
-		term:        term,
-		height:      row - 2,
-		width:       col,
-		mode:        normal,
-		cmdline:     newcommandline(),
-		cmdx:        0,
-		errmsg:      newemptyline(),
-		x:           0,
-		y:           0,
-		xoffset:     0,
-		yoffset:     0,
-		modechanged: true,
-		lines:       []*line{},
-	}
-
-	scanner := bufio.NewScanner(text)
-	for scanner.Scan() {
-		line := scanner.Text()
-		s.lines = append(s.lines, newline(line))
-	}
-
-	if len(s.lines) == 0 {
-		s.lines = []*line{newemptyline()}
-	}
-
-	s.render(true)
-
-	/*
-	 * start editor main routine
-	 */
-
-	reader := bufio.NewReader(r)
-
-	_read := func() *input {
-		return read(reader)
-	}
-
-	for {
-		// reset error message
-		// this keeps showing the error message just until the next input
-		s.errmsg = newemptyline()
-
-		buff := _read()
-
-		switch s.mode {
-		case command:
-			switch buff.special {
-			case _left:
-				s.movecmdcursor(left)
-
-			case _right:
-				s.movecmdcursor(right)
-
-			case _esc:
-				s.cmdline = newcommandline()
-				s.changemode(normal)
-
-			case _bs:
-				s.movecmdcursor(left)
-				s.cmdline.delchar(s.cmdxidx())
-
-			case _cr:
-				switch {
-				case s.cmdline.equal("q"):
-					s.cmdline = newcommandline()
-					s.cmdx = 0
-					goto finish
-
-				default:
-					s.cmdline = newcommandline()
-					s.cmdx = 0
-					s.errmsg = newline("unknown command!")
-					s.changemode(normal)
-				}
-
-			case _not_special_key:
-				s.cmdline.inschars([]*character{newCharacter(buff.r)}, s.cmdxidx())
-				s.movecmdcursor(right)
-			}
-
-		case normal:
-			switch buff.special {
-			case _left:
-				s.movecursor(left, 1)
-
-			case _down:
-				s.movecursor(down, 1)
-
-			case _up:
-				s.movecursor(up, 1)
-
-			case _right:
-				s.movecursor(right, 1)
-
-			case _not_special_key:
-				switch buff.r {
-				case ':':
-					s.changemode(command)
-
-				case 'i':
-					s.changemode(insert)
-
-				case 'd':
-					switch {
-					case s.xidx() == s.curline().length()-1:
-						// if x is at last, it's removing nl so concat current and next line.
-						s.joinlines(s.y, s.y+1)
-
-					default:
-						s.delchar()
-						s.alignx()
-					}
-
-				case 'o':
-					s.insline(down)
-					s.movecursor(down, 1)
-					s.x = 0
-					s.changemode(insert)
-
-				case 'O':
-					s.insline(up)
-					s.x = 0
-					s.changemode(insert)
-
-				/*
-				 * goto mode
-				 */
-				case 'g':
-					input2 := _read()
-					switch input2.r {
-					case 'g':
-						s.gototopleft()
-
-					case 'e':
-						s.gotobottomleft()
-
-					case 'l':
-						s.gotolinebottom()
-
-					case 's':
-						// move to (first non space character index on curren line, currentline)
-						s.gotolineheadch()
-
-					case 'h':
-						// move to (0, currentline)
-						s.gotolinehead()
-
-					default:
-						// do nothing
-					}
-
-				case 'h':
-					s.movecursor(left, 1)
-
-				case 'j':
-					s.movecursor(down, 1)
-
-				case 'k':
-					s.movecursor(up, 1)
-
-				case 'l':
-					s.movecursor(right, 1)
-				}
-
-			}
-
-		case insert:
-			switch buff.special {
-			case _left:
-				s.movecursor(left, 1)
-
-			case _down:
-				s.movecursor(down, 1)
-
-			case _up:
-				s.movecursor(up, 1)
-
-			case _right:
-				s.movecursor(right, 1)
-
-			case _esc:
-				s.changemode(normal)
-
-			case _cr:
-				curline := s.curline().copy()
-				nextline := s.curline().copy()
-				curidx := s.xidx()
-
-				s.clearline()
-				s.inscharsat(curline.buffer[:curidx], 0)
-
-				s.insline(down)
-				s.movecursor(down, 1)
-				s.inscharsat(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
-				s.x = 0
-
-			case _bs:
-				switch s.xidx() {
-				case 0:
-					if s.y != 0 {
-						// join current and above line
-						// next x is right edge on the above line
-						nextx := s.lines[s.y-1].rightedge()
-						s.joinlines(s.y-1, s.y)
-						s.movecursor(up, 1)
-						s.x = nextx
-					}
-
-				default:
-					// just delete the char
-
-					// move cursor before deleting char to prevent
-					// the cursor points nowhere after deleting the rightmost char.
-					s.movecursor(left, 1)
-					s.delcharat(s.xidx() - 1)
-				}
-
-			case _not_special_key:
-				s.alignx()
-				s.inschars([]*character{newCharacter(buff.r)})
-				s.movecursor(right, 1)
-			}
-
-		default:
-			panic("unknown mode")
-		}
-
-		s.render(false)
-
-		if _debug {
-			s.debug()
-		}
-	}
-
-finish:
-	term.refresh()
-	fmt.Fprintf(os.Stdout, "\n")
-	term.putcursor(0, 0)
+	e := neweditor(&unixVT100term{})
+	e.start(os.Stdin, r)
 }
 
 /*
