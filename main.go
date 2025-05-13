@@ -570,7 +570,7 @@ func main() {
 	editor(term, r, os.Stdin)
 }
 
-func editor(term terminal, text io.Reader, input io.Reader) {
+func editor(term terminal, text io.Reader, r io.Reader) {
 	fin, err := term.init()
 	if err != nil {
 		fin()
@@ -623,14 +623,18 @@ func editor(term terminal, text io.Reader, input io.Reader) {
 	 * start editor main routine
 	 */
 
-	reader := bufio.NewReader(input)
+	reader := bufio.NewReader(r)
+
+	_read := func() *input {
+		return read(reader)
+	}
 
 	for {
 		// reset error message
 		// this keeps showing the error message just until the next input
 		s.errmsg = newemptyline()
 
-		input := read(reader)
+		input := _read()
 
 		switch s.mode {
 		case command:
