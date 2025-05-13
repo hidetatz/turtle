@@ -228,7 +228,7 @@ type screen struct {
 	changemode   func(mode mode)
 }
 
-func newscreen(term terminal, width, height int, buff io.Reader, changemode func(mode mode)) *screen {
+func newscreen(term terminal, width, height int, buff io.ReadWriteCloser, changemode func(mode mode)) *screen {
 	s := &screen{
 		term:       term,
 		height:     height,
@@ -678,6 +678,23 @@ func (s *screen) clearline() {
 	s.changedlines = append(s.changedlines, s.y)
 }
 
+func (s *screen) content() []byte {
+	buf := []byte{}
+	for _, line := range s.lines {
+		for _, ch := range line.buffer {
+			switch {
+			case ch.tab:
+				buf = append(buf, '\t')
+			case ch.nl:
+				buf = append(buf, '\n')
+			default:
+				buf = append(buf, byte(ch.r))
+			}
+		}
+	}
+	return buf
+}
+
 func (s *screen) debug(msg ...string) {
 	debug("msg: %v, height: %v, width: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
 		msg, s.height, s.width, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
@@ -694,8 +711,9 @@ type editor struct {
 	mode    mode
 	cmdline *line
 	cmdx    int
-	errmsg  *line
+	msg     *line
 	s       *screen
+	file    *os.File
 }
 
 func neweditor(term terminal) *editor {
@@ -743,9 +761,9 @@ func (e *editor) render(first bool) {
 
 	/* update command line */
 	e.term.putcursor(0, e.height-1)
-	if !e.errmsg.empty() {
+	if !e.msg.empty() {
 		e.term.clearline()
-		fmt.Fprint(e.term, e.errmsg.cut(0, e.width))
+		fmt.Fprint(e.term, e.msg.cut(0, e.width))
 	} else {
 		e.term.clearline()
 		fmt.Fprint(e.term, e.commandline().cut(0, e.width))
@@ -758,7 +776,22 @@ func (e *editor) render(first bool) {
 	}
 }
 
-func (e *editor) start(in, buff io.Reader) {
+func (e *editor) resetcmd() {
+	e.cmdline = newcommandline()
+	e.cmdx = 0
+}
+
+func (e *editor) save() {
+	content := e.s.content()
+	e.file.Truncate(0)
+	e.file.Seek(0, 0)
+	_, err := e.file.Write([]byte(content))
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (e *editor) start(in io.Reader, file *os.File) {
 	fin, err := e.term.init()
 	if err != nil {
 		fin()
@@ -784,9 +817,12 @@ func (e *editor) start(in, buff io.Reader) {
 	e.mode = normal
 	e.cmdline = newemptyline()
 	e.cmdx = 0
-	e.errmsg = newemptyline()
-	e.s = newscreen(e.term, e.width, e.height-2, buff, func(mode mode) { e.mode = mode })
+	e.msg = newemptyline()
+	e.s = newscreen(e.term, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
+	e.file = file
 	e.render(true)
+
+	defer e.file.Close()
 
 	/*
 	 * start editor main routine
@@ -795,9 +831,9 @@ func (e *editor) start(in, buff io.Reader) {
 	reader := &reader{r: bufio.NewReader(in)}
 
 	for {
-		// reset error message
-		// this keeps showing the error message just until the next input
-		e.errmsg = newemptyline()
+		// reset message
+		// this keeps showing the message just until the next input
+		e.msg = newemptyline()
 
 		buff := reader.read()
 
@@ -823,14 +859,23 @@ func (e *editor) start(in, buff io.Reader) {
 			case _cr:
 				switch {
 				case e.cmdline.equal("q"):
-					e.cmdline = newcommandline()
-					e.cmdx = 0
+					e.resetcmd()
+					goto finish
+
+				case e.cmdline.equal("w"):
+					e.save()
+					e.msg = newline("saved!")
+					e.resetcmd()
+					e.changemode(normal)
+
+				case e.cmdline.equal("wq"):
+					e.save()
+					e.resetcmd()
 					goto finish
 
 				default:
-					e.cmdline = newcommandline()
-					e.cmdx = 0
-					e.errmsg = newline("unknown command!")
+					e.msg = newline("unknown command!")
+					e.resetcmd()
 					e.changemode(normal)
 				}
 
@@ -879,11 +924,16 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 
-	var r io.Reader
+	var file *os.File
 
 	switch len(args) {
 	case 0:
-		r = strings.NewReader("")
+		f, err := os.CreateTemp("", "__scratch__")
+		if err != nil {
+			panic(err)
+		}
+
+		file = f
 
 	case 1:
 		filename := args[0]
@@ -891,9 +941,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		defer f.Close()
 
-		r = f
+		file = f
 
 	default:
 		fmt.Println("more than 2 args are passed")
@@ -901,7 +950,7 @@ func main() {
 	}
 
 	e := neweditor(&unixVT100term{})
-	e.start(os.Stdin, r)
+	e.start(os.Stdin, file)
 }
 
 /*
