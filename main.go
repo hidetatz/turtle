@@ -14,7 +14,7 @@ import (
 	"golang.org/x/term"
 )
 
-var _debug bool
+var _debug = os.Getenv("TURTLE_DEBUG") != ""
 
 /*
  * mode
@@ -876,11 +876,6 @@ finish:
 }
 
 func main() {
-	dbg := os.Getenv("TURTLE_DEBUG")
-	if dbg != "" {
-		_debug = true
-	}
-
 	flag.Parse()
 	args := flag.Args()
 
