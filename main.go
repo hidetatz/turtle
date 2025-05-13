@@ -863,7 +863,7 @@ func (e *editor) start(in, buff io.Reader) {
 			}
 
 		default:
-			e.s.handle(e.mode, buff, reader)
+			panic("unknown mode")
 		}
 
 		e.render(false)
