@@ -44,6 +44,8 @@ By default, turtle editor is in normal mode.
 * `gh`: move to the current line head
 * `gl`: move to the current line tail
 * `gs`: move to the current line head where non-space character exists
+* `Ctrl-u`: scroll up by half page
+* `Ctrl-d`: scroll down by half page
 
 ### command mode
 

@@ -224,6 +224,7 @@ type screen struct {
 	xoffset int
 	yoffset int
 
+	scrolled     bool
 	changedlines []int
 	changemode   func(mode mode)
 }
@@ -361,7 +362,7 @@ func (s *screen) render(first bool) {
 	}
 
 	/* update texts */
-	if scrolled || first {
+	if scrolled || s.scrolled || first {
 		// update all lines
 		for i := range s.height {
 			s.term.putcursor(0, i)
@@ -411,6 +412,18 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 
 		case _right:
 			s.movecursor(right, 1)
+
+		case _ctrl_u:
+			move := s.height / 2
+			s.y = max(0, s.y-move)
+			s.yoffset = max(0, s.yoffset-move)
+			s.scrolled = true
+
+		case _ctrl_d:
+			move := s.height / 2
+			s.y = min(len(s.lines)-1, s.y+move)
+			s.yoffset = s.yoffset + move
+			s.scrolled = true
 
 		case _not_special_key:
 			switch buff.r {
@@ -540,6 +553,8 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 	default:
 		panic(fmt.Sprintf("cannot handle mode %v", mode))
 	}
+
+	s.debug()
 }
 
 type direction int
