@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"unicode"
@@ -757,7 +758,7 @@ func (e *editor) cmdxidx() int {
 }
 
 func (e *editor) statusline() *line {
-	return newline(fmt.Sprintf("mode: %v", e.mode))
+	return newline(fmt.Sprintf(" %v  %v", e.mode, e.file.Name()))
 }
 
 func (e *editor) commandline() *line {
@@ -939,29 +940,20 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 
-	var file *os.File
-
+	var filename string
 	switch len(args) {
 	case 0:
-		f, err := os.CreateTemp("", "__scratch__")
-		if err != nil {
-			panic(err)
-		}
-
-		file = f
-
+		filename = filepath.Join(os.TempDir(), "__scratch__")
 	case 1:
-		filename := args[0]
-		f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
-		if err != nil {
-			panic(err)
-		}
-
-		file = f
-
+		filename = args[0]
 	default:
 		fmt.Println("more than 2 args are passed")
 		return
+	}
+
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		panic(err)
 	}
 
 	e := neweditor(&unixVT100term{})
