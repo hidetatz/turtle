@@ -177,6 +177,32 @@ func (l *line) equal(s string) bool {
 	return s == tmp.String()
 }
 
+func (l *line) trimprefix(pref string) string {
+	s := strings.TrimSuffix(l.String(), " ")
+	return strings.TrimPrefix(s, pref)
+}
+
+func (l *line) startswith(s string) bool {
+	for i, r := range []rune(s) {
+		c := l.buffer[i]
+		switch {
+		case c.tab:
+			if r != '\t' {
+				return false
+			}
+		case c.nl:
+			if r != '\n' {
+				return false
+			}
+		default:
+			if r != c.r {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (l *line) copy() *line {
 	copy := &line{make([]*character, len(l.buffer))}
 	for i := range l.buffer {
@@ -727,12 +753,12 @@ type screenterminal interface {
 }
 
 type _screenterminal struct {
-	term             terminal
-	xoffset, yoffset int
+	term terminal
+	x, y int
 }
 
 func (st *_screenterminal) putcursor(x, y int) {
-	fmt.Fprint(st, fmt.Sprintf("\x1b[%v;%vH", st.yoffset+y+1, st.xoffset+x+1))
+	fmt.Fprint(st, fmt.Sprintf("\x1b[%v;%vH", st.y+y+1, st.x+x+1))
 }
 
 func (st *_screenterminal) clearline() {
@@ -743,6 +769,35 @@ func (t *_screenterminal) Write(p []byte) (int, error) {
 	return t.term.Write(p)
 }
 
+type buffer struct {
+	s     *screen
+	x, y  int
+	file  *os.File
+	dirty bool
+}
+
+func (b *buffer) filename() string {
+	return b.file.Name()
+}
+
+func (b *buffer) handle(mode mode, buff *input, reader *reader) {
+	b.s.handle(mode, buff, reader)
+}
+
+func (b *buffer) render(first bool) {
+	b.s.render(first)
+}
+
+func (b *buffer) save() {
+	content := b.s.content()
+	b.file.Truncate(0)
+	b.file.Seek(0, 0)
+	_, err := b.file.Write([]byte(content))
+	if err != nil {
+		panic(err)
+	}
+}
+
 type editor struct {
 	term    terminal
 	height  int
@@ -751,12 +806,25 @@ type editor struct {
 	cmdline *line
 	cmdx    int
 	msg     *line
-	s       *screen
-	file    *os.File
+
+	dispbuffs  []*buffer
+	activebuff int
+
+	winmodified bool
 }
 
 func neweditor(term terminal) *editor {
 	return &editor{term: term}
+}
+
+func (e *editor) newbuffer(file *os.File, x, y, width, height int) *buffer {
+	return &buffer{
+		s:     newscreen(&_screenterminal{term: e.term, x: x, y: y}, width, height, file, func(mode mode) { e.mode = mode }),
+		x:     x,
+		y:     y,
+		file:  file,
+		dirty: false,
+	}
 }
 
 func (e *editor) changemode(mode mode) {
@@ -780,8 +848,12 @@ func (e *editor) cmdxidx() int {
 	return e.cmdline.charidx(e.cmdx, 0)
 }
 
+func (e *editor) curbuff() *buffer {
+	return e.dispbuffs[e.activebuff]
+}
+
 func (e *editor) statusline() *line {
-	return newline(fmt.Sprintf(" %v  %v", e.mode, e.file.Name()))
+	return newline(fmt.Sprintf(" %v  %v", e.mode, e.curbuff().filename()))
 }
 
 func (e *editor) commandline() *line {
@@ -792,12 +864,38 @@ func (e *editor) commandline() *line {
 	return newline(fmt.Sprintf(":%v", e.cmdline))
 }
 
-func (e *editor) render(first bool) {
-	// render status line
-	e.term.putcursor(0, e.height-2)
-	e.term.clearline()
-	fmt.Fprint(e.term, e.statusline().cut(0, e.width))
+func (e *editor) openbuffervertical(filename string) error {
+	_, err := os.Stat(filename)
+	if err != nil {
+		debug("cannot stat file: %v", err)
+		return fmt.Errorf("not found: %v", filename)
+	}
 
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		debug("cannot open file: %v", err)
+		return fmt.Errorf("cannot open: %v", filename)
+	}
+	curbuf := e.curbuff()
+	var curbufw, newbufw int
+	if curbuf.s.width%2 == 0 {
+		curbufw = curbuf.s.width / 2
+		newbufw = curbuf.s.width/2 - 1
+	} else {
+		curbufw = curbuf.s.width / 2
+		newbufw = curbuf.s.width / 2
+	}
+
+	newbufx := curbuf.x + curbufw + 1
+	e.dispbuffs = append(e.dispbuffs, e.newbuffer(file, newbufx, curbuf.y, newbufw, curbuf.s.height))
+	curbuf.s.width = curbufw
+	e.activebuff = len(e.dispbuffs) - 1
+	e.winmodified = true
+
+	return nil
+}
+
+func (e *editor) render(first bool) {
 	/* update command line */
 	e.term.putcursor(0, e.height-1)
 	if !e.msg.empty() {
@@ -808,26 +906,47 @@ func (e *editor) render(first bool) {
 		fmt.Fprint(e.term, e.commandline().cut(0, e.width))
 	}
 
-	e.s.render(first)
+	if e.winmodified {
+		for i, buff := range e.dispbuffs {
+			/* render status line */
+			e.term.putcursor(buff.x, buff.y+buff.s.height)
+			e.term.clearline()
+			fmt.Fprint(e.term, newline(fmt.Sprintf(" %v", buff.filename())).cut(0, buff.s.width))
+
+			if i != e.activebuff {
+				buff.render(true)
+			}
+
+			if buff.x != 0 {
+				for i := range e.height - 1 {
+					e.term.putcursor(buff.x-1, i)
+					fmt.Fprint(e.term, "|")
+				}
+			}
+		}
+
+		e.term.putcursor(e.curbuff().x, e.curbuff().y+e.curbuff().s.height)
+		e.term.clearline()
+		fmt.Fprint(e.term, newline(fmt.Sprintf(" %v  %v", e.mode, e.curbuff().filename())).cut(0, e.curbuff().s.width))
+		e.curbuff().render(true)
+	} else {
+		/* render status line */
+		e.term.putcursor(e.curbuff().x, e.curbuff().y+e.curbuff().s.height)
+		e.term.clearline()
+		fmt.Fprint(e.term, newline(fmt.Sprintf(" %v  %v", e.mode, e.curbuff().filename())).cut(0, e.curbuff().s.width))
+		e.curbuff().render(first)
+	}
 
 	if e.mode == command {
 		e.term.putcursor(e.cmdx+1, e.height-1)
 	}
+
+	e.winmodified = false
 }
 
 func (e *editor) resetcmd() {
 	e.cmdline = newcommandline()
 	e.cmdx = 0
-}
-
-func (e *editor) save() {
-	content := e.s.content()
-	e.file.Truncate(0)
-	e.file.Seek(0, 0)
-	_, err := e.file.Write([]byte(content))
-	if err != nil {
-		panic(err)
-	}
 }
 
 func (e *editor) start(in io.Reader, file *os.File) {
@@ -857,11 +976,14 @@ func (e *editor) start(in io.Reader, file *os.File) {
 	e.cmdline = newemptyline()
 	e.cmdx = 0
 	e.msg = newemptyline()
-	e.s = newscreen(&_screenterminal{term: e.term, xoffset: 0, yoffset: 0}, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
-	e.file = file
+	e.dispbuffs = append(e.dispbuffs, e.newbuffer(file, 0, 0, e.width, e.height-2))
 	e.render(true)
 
-	defer e.file.Close()
+	defer func() {
+		for _, buff := range e.dispbuffs {
+			buff.file.Close()
+		}
+	}()
 
 	/*
 	 * start editor main routine
@@ -886,7 +1008,7 @@ func (e *editor) start(in io.Reader, file *os.File) {
 				e.movecmdcursor(right)
 
 			case _esc:
-				e.cmdline = newcommandline()
+				e.resetcmd()
 				e.changemode(normal)
 
 			case _bs:
@@ -902,15 +1024,24 @@ func (e *editor) start(in io.Reader, file *os.File) {
 					goto finish
 
 				case e.cmdline.equal("w"):
-					e.save()
+					e.curbuff().save()
 					e.msg = newline("saved!")
 					e.resetcmd()
 					e.changemode(normal)
 
 				case e.cmdline.equal("wq"):
-					e.save()
+					e.curbuff().save()
 					e.resetcmd()
 					goto finish
+
+				case e.cmdline.startswith("vs "):
+					filename := e.cmdline.trimprefix("vs ")
+					err := e.openbuffervertical(filename)
+					if err != nil {
+						e.msg = newline(err.Error())
+					}
+					e.changemode(normal)
+					e.resetcmd()
 
 				default:
 					e.msg = newline("unknown command!")
@@ -932,18 +1063,20 @@ func (e *editor) start(in io.Reader, file *os.File) {
 				case 'i':
 					e.changemode(insert)
 				default:
-					e.s.handle(e.mode, buff, reader)
+					e.curbuff().handle(e.mode, buff, reader)
 				}
 			default:
-				e.s.handle(e.mode, buff, reader)
+				e.curbuff().handle(e.mode, buff, reader)
 			}
 
 		case insert:
 			switch buff.special {
 			case _esc:
 				e.changemode(normal)
+			case _tab:
+				e.curbuff().handle(e.mode, &input{special: _not_special_key, r: '\t'}, reader)
 			default:
-				e.s.handle(e.mode, buff, reader)
+				e.curbuff().handle(e.mode, buff, reader)
 			}
 
 		default:
@@ -1020,13 +1153,13 @@ func (k key) String() string {
 	case _del:
 		return "Delete"
 	case _up:
-		return "↑"
+		return "up"
 	case _down:
-		return "↓"
+		return "down"
 	case _right:
-		return "→"
+		return "right"
 	case _left:
-		return "←"
+		return "left"
 	case _home:
 		return "Home"
 	case _end:
