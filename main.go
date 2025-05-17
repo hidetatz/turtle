@@ -839,7 +839,7 @@ func (w *window) _split(term terminal, modechange func(mode mode), file file) *w
 	// as much as possible. This considers splitter sign (| or -).
 	//
 	// suppose total is 30, count is 4, then
-	//    7   |   7   |   7   |   6
+	//    7   |   7   |   7   |   6   (7 + 7 + 7 + 6 + 3(splitter) = 30)
 	// AAAAAAA|BBBBBBB|CCCCCCC|DDDDDD
 	// is expected (| sign is window splitter).
 	div := func(width, count int) []int {
