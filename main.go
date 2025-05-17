@@ -207,15 +207,31 @@ func (l *line) cut(from, limit int) string {
 	return s[from:to]
 }
 
+func (l *line) hasprefix(prefix string) bool {
+	return strings.HasPrefix(l.String(), prefix)
+}
+
+func (l *line) trimprefix(prefix string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(l.String(), prefix), " ")
+}
+
 /*
  * screen
  */
+
+type file interface {
+	io.ReadWriteCloser
+	Name() string
+	Truncate(size int64) error
+	Seek(offset int64, whence int) (int64, error)
+}
 
 type screen struct {
 	term   *screenterm
 	width  int
 	height int
 	lines  []*line
+	file   file
 
 	// current desired cursor position. might be different with the actual position.
 	x int
@@ -230,11 +246,12 @@ type screen struct {
 	changemode   func(mode mode)
 }
 
-func newscreen(term *screenterm, width, height int, buff io.ReadWriteCloser, changemode func(mode mode)) *screen {
+func newscreen(term terminal, x, y, width, height int, file file, changemode func(mode mode)) *screen {
 	s := &screen{
-		term:       term,
+		term:       &screenterm{term: term, width: width, x: x, y: y},
 		height:     height,
 		width:      width,
+		file:       file,
 		x:          0,
 		y:          0,
 		xoffset:    0,
@@ -243,7 +260,7 @@ func newscreen(term *screenterm, width, height int, buff io.ReadWriteCloser, cha
 		changemode: changemode,
 	}
 
-	scanner := bufio.NewScanner(buff)
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
 		s.lines = append(s.lines, newline(line))
@@ -254,6 +271,10 @@ func newscreen(term *screenterm, width, height int, buff io.ReadWriteCloser, cha
 	}
 
 	return s
+}
+
+func (s *screen) statusline() *line {
+	return newline(fmt.Sprintf(" %v", s.file.Name()))
 }
 
 func (s *screen) curline() *line {
@@ -311,7 +332,7 @@ func (s *screen) render(first bool) {
 	ypad := 4
 	yok := func() direction {
 		padup := s.y - s.yoffset
-		paddown := (s.yoffset + s.height - 1) - s.y
+		paddown := (s.yoffset + s.height - 2) - s.y
 
 		// cursor has up and down padding, it's ok
 		if padup >= ypad && paddown >= ypad {
@@ -338,7 +359,7 @@ func (s *screen) render(first bool) {
 				return down
 			}
 
-			if s.yoffset+s.height == len(s.lines) {
+			if s.yoffset+s.height-1 == len(s.lines) {
 				return 0
 			}
 
@@ -365,7 +386,7 @@ func (s *screen) render(first bool) {
 	/* update texts */
 	if scrolled || s.scrolled || first {
 		// update all lines
-		for i := range s.height {
+		for i := range s.height - 1 {
 			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
 				line := s.lines[s.yoffset+i]
@@ -378,7 +399,7 @@ func (s *screen) render(first bool) {
 		s.changedlines = slices.Compact(s.changedlines)
 		for _, l := range s.changedlines {
 			// if changed line is not shown on the screen, skip
-			if l < s.yoffset || s.height-1 < l-s.yoffset {
+			if l < s.yoffset || s.height-2 < l-s.yoffset {
 				continue
 			}
 
@@ -390,6 +411,10 @@ func (s *screen) render(first bool) {
 			}
 		}
 	}
+
+	// render status line
+	s.term.clearline(s.height - 1)
+	fmt.Fprint(s.term, s.statusline().cut(0, s.width))
 
 	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
 	s.actualx = x - s.xoffset
@@ -413,13 +438,13 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 			s.movecursor(right, 1)
 
 		case _ctrl_u:
-			move := s.height / 2
+			move := (s.height - 1) / 2
 			s.y = max(0, s.y-move)
 			s.yoffset = max(0, s.yoffset-move)
 			s.scrolled = true
 
 		case _ctrl_d:
-			move := s.height / 2
+			move := (s.height - 1) / 2
 			s.y = min(len(s.lines)-1, s.y+move)
 			s.yoffset = s.yoffset + move
 			s.scrolled = true
@@ -552,8 +577,13 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 	default:
 		panic(fmt.Sprintf("cannot handle mode %v", mode))
 	}
+}
 
-	s.debug()
+func (s *screen) String() string {
+	return fmt.Sprintf(
+		"{term: %v, width: %v, height: %v, x: %v, y: %v, actualx: %v, xoffset: %v, yoffset: %v, file: %v, lines: %v}",
+		s.term, s.width, s.height, s.x, s.y, s.actualx, s.xoffset, s.yoffset, s.file.Name(), len(s.lines),
+	)
 }
 
 type direction int
@@ -564,6 +594,23 @@ const (
 	left
 	right
 )
+
+func (d direction) String() string {
+	switch d {
+	case up:
+		return "up"
+	case down:
+		return "down"
+	case left:
+		return "left"
+	case right:
+		return "right"
+	case 0:
+		return "not_set"
+	default:
+		panic("unknown direction")
+	}
+}
 
 func (s *screen) movecursor(direction direction, cnt int) {
 	switch direction {
@@ -709,11 +756,204 @@ func (s *screen) content() []byte {
 	return buf
 }
 
-func (s *screen) debug(msg ...string) {
-	if _debug {
-		debug("msg: %v, height: %v, width: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
-			msg, s.height, s.width, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+/*
+ * window
+ */
+
+type window struct {
+	x         int
+	y         int
+	width     int
+	height    int
+	parent    *window
+	children  []*window
+	screen    *screen
+	direction direction // down or right
+}
+
+func newrootwindow(s *screen) *window {
+	root := &window{x: 0, y: 0, width: s.width, height: s.height, parent: nil}
+	child := &window{x: 0, y: 0, width: s.width, height: s.height, screen: s, parent: root}
+	root.children = []*window{child}
+	return root
+}
+
+func newwindow(term terminal, x, y, width, height int, file file, modechange func(mode mode)) *window {
+	return &window{
+		x:      x,
+		y:      y,
+		width:  width,
+		height: height,
+		screen: newscreen(term, x, y, width, height, file, modechange),
 	}
+}
+
+func (w *window) isroot() bool {
+	return w.parent == nil
+}
+
+func (w *window) isleaf() bool {
+	return len(w.children) == 0
+}
+
+func (w *window) setsize(x, y, width, height int) {
+	w.x = x
+	w.y = y
+	w.width = width
+	w.height = height
+	w.screen.width = width
+	w.screen.height = height
+	w.screen.term.x = x
+	w.screen.term.y = y
+	w.screen.term.width = width
+}
+
+func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file) *window {
+	if direction != down && direction != right {
+		panic("unexpected direction to split")
+	}
+
+	if w.parent.isroot() && len(w.parent.children) == 1 {
+		w.parent.direction = direction
+		return w.parent._split(term, modechange, file)
+	}
+
+	if w.parent.direction != direction {
+		w.direction = direction
+		return w._split(term, modechange, file)
+	}
+
+	return w.parent._split(term, modechange, file)
+}
+
+func sum(ints []int) int {
+	sum := 0
+	for i := range ints {
+		sum += ints[i]
+	}
+	return sum
+}
+
+func (w *window) _split(term terminal, modechange func(mode mode), file file) *window {
+	// divide the $width into $count items so that they are all the same length
+	// as much as possible. This considers splitter sign (| or -).
+	//
+	// suppose total is 30, count is 4, then
+	//    7   |   7   |   7   |   6
+	// AAAAAAA|BBBBBBB|CCCCCCC|DDDDDD
+	// is expected (| sign is window splitter).
+	div := func(width, count int) []int {
+		width -= count - 1
+		result := make([]int, count)
+		for i := range count {
+			_mod := width % (count - i)
+			_div := width / (count - i)
+			if _mod == 0 {
+				result[i] = _div
+				width -= _div
+			} else {
+				result[i] = _div + 1
+				width -= _div + 1
+			}
+		}
+		return result
+	}
+
+	if w.isleaf() {
+		w.children = append(w.children, &window{screen: w.screen, parent: w}) // temporary window, size is set properly below
+		w.screen = nil
+	}
+
+	var newwin *window
+	switch w.direction {
+	case right:
+		widths := div(w.width, len(w.children)+1)
+		for i := range w.children {
+			x := w.x + sum(widths[:i]) + 1*i
+			y := w.y
+			width := widths[i]
+			height := w.height
+			w.children[i].setsize(x, y, width, height)
+		}
+
+		newwinwidth := widths[len(widths)-1]
+		newwinx := w.x + sum(widths[:len(widths)-1]) + (1*len(widths) - 1)
+		newwin = newwindow(term, newwinx, w.y, newwinwidth, w.height, file, modechange)
+
+	case down:
+		heights := div(w.height, len(w.children)+1)
+		for i := range w.children {
+			x := w.x
+			y := w.y + sum(heights[:i]) + 1*i
+			width := w.width
+			height := heights[i]
+			w.children[i].setsize(x, y, width, height)
+		}
+
+		newwinheight := heights[len(heights)-1]
+		newwiny := w.y + sum(heights[:len(heights)-1]) + (1 * (len(heights) - 1))
+		newwin = newwindow(term, w.x, newwiny, w.width, newwinheight, file, modechange)
+
+	default:
+		panic("unexpected split direction")
+	}
+
+	newwin.parent = w
+	w.children = append(w.children, newwin)
+	return newwin
+}
+
+func (w *window) render(term *screenterm, first bool) {
+	if w.isleaf() {
+		w.screen.render(first)
+		return
+	}
+
+	for i, child := range w.children {
+		child.render(term, first)
+		if i != len(w.children)-1 {
+			if w.direction == right {
+				for j := range child.height {
+					term.putcursor(child.x+child.width, child.y+j)
+					fmt.Fprintf(term, "|")
+				}
+			} else {
+				for j := range child.width {
+					term.putcursor(child.x+j, child.y+child.height)
+					fmt.Fprintf(term, "-")
+				}
+
+			}
+		}
+	}
+}
+
+func (w *window) String() string {
+	return w.string(0)
+}
+
+func (w *window) string(depth int) string {
+	var sb strings.Builder
+	f0 := func(s string, a ...any) { sb.WriteString(fmt.Sprintf(s, a...)) }
+	f := func(s string, a ...any) { sb.WriteString(strings.Repeat("  ", depth) + fmt.Sprintf(s, a...)) }
+	f2 := func(s string, a ...any) { sb.WriteString(strings.Repeat("  ", depth+1) + fmt.Sprintf(s, a...)) }
+
+	f("{\n")
+	f2("x: %v, y: %v, width: %v, height: %v, direction: %v,\n", w.x, w.y, w.width, w.height, w.direction)
+	f2("screen: %v\n", w.screen)
+	f2("children : [")
+	if len(w.children) == 0 {
+		f0("]\n")
+	} else {
+		f0("\n")
+		for _, child := range w.children {
+			f("%v\n", child.string(depth+2))
+		}
+		f2("]\n")
+	}
+	f("}")
+
+	return sb.String()
 }
 
 /*
@@ -721,15 +961,16 @@ func (s *screen) debug(msg ...string) {
  */
 
 type editor struct {
-	term    *screenterm
-	height  int
-	width   int
-	mode    mode
-	cmdline *line
-	cmdx    int
-	msg     *line
-	s       *screen
-	file    *os.File
+	term          *screenterm
+	rootwin       *window
+	activewin     *window
+	windowchanged bool
+	height        int
+	width         int
+	mode          mode
+	cmdline       *line
+	cmdx          int
+	msg           *line
 }
 
 func neweditor(term *screenterm) *editor {
@@ -738,6 +979,33 @@ func neweditor(term *screenterm) *editor {
 
 func (e *editor) changemode(mode mode) {
 	e.mode = mode
+}
+
+func (e *editor) vsplit(filename string) {
+	e.split(filename, right)
+}
+
+func (e *editor) hsplit(filename string) {
+	e.split(filename, down)
+}
+
+func (e *editor) split(filename string, direction direction) {
+	// todo: this should handle new file
+	_, err := os.Stat(filename)
+	if err != nil {
+		e.msg = newline(fmt.Sprintf("file not found: '%v'", filename))
+		e.changemode(normal)
+		return
+	}
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		e.msg = newline(fmt.Sprintf("cannot open: '%v'", filename))
+		e.changemode(normal)
+		return
+	}
+
+	e.activewin = e.activewin.split(e.term.term, func(mode mode) { e.mode = mode }, direction, file)
+	e.windowchanged = true
 }
 
 func (e *editor) movecmdcursor(direction direction) {
@@ -757,10 +1025,6 @@ func (e *editor) cmdxidx() int {
 	return e.cmdline.charidx(e.cmdx, 0)
 }
 
-func (e *editor) statusline() *line {
-	return newline(fmt.Sprintf(" %v  %v", e.mode, e.file.Name()))
-}
-
 func (e *editor) commandline() *line {
 	if e.mode != command {
 		return newemptyline()
@@ -770,10 +1034,6 @@ func (e *editor) commandline() *line {
 }
 
 func (e *editor) render(first bool) {
-	// render status line
-	e.term.clearline(e.height - 2)
-	fmt.Fprint(e.term, e.statusline().cut(0, e.width))
-
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
@@ -782,11 +1042,17 @@ func (e *editor) render(first bool) {
 		fmt.Fprint(e.term, e.commandline().cut(0, e.width))
 	}
 
-	e.s.render(first)
+	if e.windowchanged {
+		e.rootwin.render(e.term, true)
+	} else {
+		e.activewin.render(e.term, first)
+	}
 
 	if e.mode == command {
 		e.term.putcursor(e.cmdx+1, e.height-1)
 	}
+
+	e.windowchanged = false
 }
 
 func (e *editor) resetcmd() {
@@ -795,10 +1061,10 @@ func (e *editor) resetcmd() {
 }
 
 func (e *editor) save() {
-	content := e.s.content()
-	e.file.Truncate(0)
-	e.file.Seek(0, 0)
-	_, err := e.file.Write([]byte(content))
+	content := e.activewin.screen.content()
+	e.activewin.screen.file.Truncate(0)
+	e.activewin.screen.file.Seek(0, 0)
+	_, err := e.activewin.screen.file.Write([]byte(content))
 	if err != nil {
 		panic(err)
 	}
@@ -833,13 +1099,13 @@ func start(term terminal, in io.Reader, file *os.File) {
 		cmdline: newemptyline(),
 		cmdx:    0,
 		msg:     newemptyline(),
-		file:    file,
 	}
 
-	e.s = newscreen(&screenterm{term: e.term.term, width: width}, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
+	e.rootwin = newrootwindow(newscreen(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode }))
+	e.activewin = e.rootwin.children[0]
 	e.render(true)
 
-	defer e.file.Close()
+	defer e.activewin.screen.file.Close()
 
 	/*
 	 * start editor main routine
@@ -879,6 +1145,18 @@ func start(term terminal, in io.Reader, file *os.File) {
 					e.resetcmd()
 					goto finish
 
+				case e.cmdline.hasprefix("vs "):
+					filename := e.cmdline.trimprefix("vs ")
+					e.vsplit(filename)
+					e.resetcmd()
+					e.changemode(normal)
+
+				case e.cmdline.hasprefix("hs"):
+					filename := e.cmdline.trimprefix("hs ")
+					e.hsplit(filename)
+					e.resetcmd()
+					e.changemode(normal)
+
 				case e.cmdline.equal("w"):
 					e.save()
 					e.msg = newline("saved!")
@@ -910,10 +1188,10 @@ func start(term terminal, in io.Reader, file *os.File) {
 				case 'i':
 					e.changemode(insert)
 				default:
-					e.s.handle(e.mode, buff, reader)
+					e.activewin.screen.handle(e.mode, buff, reader)
 				}
 			default:
-				e.s.handle(e.mode, buff, reader)
+				e.activewin.screen.handle(e.mode, buff, reader)
 			}
 
 		case insert:
@@ -921,7 +1199,7 @@ func start(term terminal, in io.Reader, file *os.File) {
 			case _esc:
 				e.changemode(normal)
 			default:
-				e.s.handle(e.mode, buff, reader)
+				e.activewin.screen.handle(e.mode, buff, reader)
 			}
 
 		default:
@@ -929,6 +1207,7 @@ func start(term terminal, in io.Reader, file *os.File) {
 		}
 
 		e.render(false)
+		debug("%v\n", e.rootwin)
 	}
 
 finish:
@@ -997,13 +1276,13 @@ func (k key) String() string {
 	case _del:
 		return "Delete"
 	case _up:
-		return "↑"
+		return "�"
 	case _down:
-		return "↓"
+		return "�"
 	case _right:
-		return "→"
+		return "�"
 	case _left:
-		return "←"
+		return "�"
 	case _home:
 		return "Home"
 	case _end:
@@ -1276,7 +1555,10 @@ func (r *reader) read() (i *input) {
 }
 
 func debug(format string, a ...any) (int, error) {
-	return fmt.Fprintf(os.Stderr, format, a...)
+	if _debug {
+		return fmt.Fprintf(os.Stderr, format, a...)
+	}
+	return 0, nil
 }
 
 /*
@@ -1298,6 +1580,10 @@ type screenterm struct {
 
 func newscreenterm(term terminal, x, y, width int) *screenterm {
 	return &screenterm{term: term, x: x, y: y, width: width}
+}
+
+func (st *screenterm) String() string {
+	return fmt.Sprintf("{x: %v, y: %v, width: %v}", st.x, st.y, st.width)
 }
 
 func (st *screenterm) init() (func(), error) {

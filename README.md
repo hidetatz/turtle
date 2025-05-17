@@ -54,6 +54,8 @@ Every command is executed after Enter keypress.
 * `q`: close the editor
 * `w`: save the buffer (beta)
 * `wq`: save the buffer (beta) and close the editor
+* `vs filename`: opens a new file in vertically split window.
+* `hs filename`: opens a new file in horizontally split window.
 
 ### insert mode
 
