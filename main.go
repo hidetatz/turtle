@@ -212,7 +212,7 @@ func (l *line) cut(from, limit int) string {
  */
 
 type screen struct {
-	term   screenterminal
+	term   terminal
 	width  int
 	height int
 	lines  []*line
@@ -230,7 +230,7 @@ type screen struct {
 	changemode   func(mode mode)
 }
 
-func newscreen(term screenterminal, width, height int, buff io.ReadWriteCloser, changemode func(mode mode)) *screen {
+func newscreen(term terminal, width, height int, buff io.ReadWriteCloser, changemode func(mode mode)) *screen {
 	s := &screen{
 		term:       term,
 		height:     height,
@@ -720,29 +720,6 @@ func (s *screen) debug(msg ...string) {
  * editor
  */
 
-type screenterminal interface {
-	io.Writer
-	putcursor(x, y int)
-	clearline()
-}
-
-type _screenterminal struct {
-	term             terminal
-	xoffset, yoffset int
-}
-
-func (st *_screenterminal) putcursor(x, y int) {
-	fmt.Fprint(st, fmt.Sprintf("\x1b[%v;%vH", st.yoffset+y+1, st.xoffset+x+1))
-}
-
-func (st *_screenterminal) clearline() {
-	st.term.clearline()
-}
-
-func (t *_screenterminal) Write(p []byte) (int, error) {
-	return t.term.Write(p)
-}
-
 type editor struct {
 	term    terminal
 	height  int
@@ -857,7 +834,7 @@ func (e *editor) start(in io.Reader, file *os.File) {
 	e.cmdline = newemptyline()
 	e.cmdx = 0
 	e.msg = newemptyline()
-	e.s = newscreen(&_screenterminal{term: e.term, xoffset: 0, yoffset: 0}, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
+	e.s = newscreen(e.term, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
 	e.file = file
 	e.render(true)
 
@@ -1299,10 +1276,7 @@ func (r *reader) read() (i *input) {
 }
 
 func debug(format string, a ...any) (int, error) {
-	if _debug {
-		return fmt.Fprintf(os.Stderr, format, a...)
-	}
-	return 0, nil
+	return fmt.Fprintf(os.Stderr, format, a...)
 }
 
 /*
