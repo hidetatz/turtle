@@ -212,7 +212,7 @@ func (l *line) cut(from, limit int) string {
  */
 
 type screen struct {
-	term   terminal
+	term   *screenterm
 	width  int
 	height int
 	lines  []*line
@@ -230,7 +230,7 @@ type screen struct {
 	changemode   func(mode mode)
 }
 
-func newscreen(term terminal, width, height int, buff io.ReadWriteCloser, changemode func(mode mode)) *screen {
+func newscreen(term *screenterm, width, height int, buff io.ReadWriteCloser, changemode func(mode mode)) *screen {
 	s := &screen{
 		term:       term,
 		height:     height,
@@ -366,8 +366,7 @@ func (s *screen) render(first bool) {
 	if scrolled || s.scrolled || first {
 		// update all lines
 		for i := range s.height {
-			s.term.putcursor(0, i)
-			s.term.clearline()
+			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
 				line := s.lines[s.yoffset+i]
 				fmt.Fprint(s.term, line.cut(s.xoffset, s.width))
@@ -383,8 +382,7 @@ func (s *screen) render(first bool) {
 				continue
 			}
 
-			s.term.putcursor(0, l-s.yoffset)
-			s.term.clearline()
+			s.term.clearline(l - s.yoffset)
 
 			if l <= len(s.lines)-1 {
 				line := s.lines[l].cut(s.xoffset, s.width)
@@ -712,8 +710,10 @@ func (s *screen) content() []byte {
 }
 
 func (s *screen) debug(msg ...string) {
-	debug("msg: %v, height: %v, width: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
-		msg, s.height, s.width, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+	if _debug {
+		debug("msg: %v, height: %v, width: %v, x: %v, y: %v, lines: %v, curlinelen: %v, curlinewidth: %v, xoffset: %v, yoffset: %v\n",
+			msg, s.height, s.width, s.x, s.y, len(s.lines), s.curline().length(), s.curline().width(), s.xoffset, s.yoffset)
+	}
 }
 
 /*
@@ -721,7 +721,7 @@ func (s *screen) debug(msg ...string) {
  */
 
 type editor struct {
-	term    terminal
+	term    *screenterm
 	height  int
 	width   int
 	mode    mode
@@ -732,7 +732,7 @@ type editor struct {
 	file    *os.File
 }
 
-func neweditor(term terminal) *editor {
+func neweditor(term *screenterm) *editor {
 	return &editor{term: term}
 }
 
@@ -771,17 +771,14 @@ func (e *editor) commandline() *line {
 
 func (e *editor) render(first bool) {
 	// render status line
-	e.term.putcursor(0, e.height-2)
-	e.term.clearline()
+	e.term.clearline(e.height - 2)
 	fmt.Fprint(e.term, e.statusline().cut(0, e.width))
 
 	/* update command line */
-	e.term.putcursor(0, e.height-1)
+	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
-		e.term.clearline()
 		fmt.Fprint(e.term, e.msg.cut(0, e.width))
 	} else {
-		e.term.clearline()
 		fmt.Fprint(e.term, e.commandline().cut(0, e.width))
 	}
 
@@ -807,35 +804,39 @@ func (e *editor) save() {
 	}
 }
 
-func (e *editor) start(in io.Reader, file *os.File) {
-	fin, err := e.term.init()
+func start(term terminal, in io.Reader, file *os.File) {
+	fin, err := term.init()
 	if err != nil {
 		fin()
 		panic(err)
 	}
 
 	defer fin()
-	defer e.term.refresh()
+	defer term.refresh()
 
-	e.term.refresh()
+	term.refresh()
 
 	/*
 	 * Prepare editor state
 	 */
 
-	height, width, err := e.term.windowsize()
+	height, width, err := term.windowsize()
 	if err != nil {
 		panic(err)
 	}
 
-	e.width = width
-	e.height = height
-	e.mode = normal
-	e.cmdline = newemptyline()
-	e.cmdx = 0
-	e.msg = newemptyline()
-	e.s = newscreen(e.term, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
-	e.file = file
+	e := &editor{
+		term:    newscreenterm(term, 0, 0, width),
+		height:  height,
+		width:   width,
+		mode:    normal,
+		cmdline: newemptyline(),
+		cmdx:    0,
+		msg:     newemptyline(),
+		file:    file,
+	}
+
+	e.s = newscreen(&screenterm{term: e.term.term, width: width}, e.width, e.height-2, file, func(mode mode) { e.mode = mode })
 	e.render(true)
 
 	defer e.file.Close()
@@ -956,8 +957,7 @@ func main() {
 		panic(err)
 	}
 
-	e := neweditor(&unixVT100term{})
-	e.start(os.Stdin, file)
+	start(&unixVT100term{}, os.Stdin, file)
 }
 
 /*
@@ -1280,12 +1280,55 @@ func debug(format string, a ...any) (int, error) {
 }
 
 /*
- * terminal
+ * abstract virtual terminal interface
  */
 
-func ctrl(input byte) rune {
-	return rune(input & 0x1f)
+type screenterm struct {
+	io.Writer
+
+	term terminal
+
+	// screen position in the terminal screen
+	x int
+	y int
+
+	// screen width
+	width int
 }
+
+func newscreenterm(term terminal, x, y, width int) *screenterm {
+	return &screenterm{term: term, x: x, y: y, width: width}
+}
+
+func (st *screenterm) init() (func(), error) {
+	return st.term.init()
+}
+
+func (st *screenterm) windowsize() (int, int, error) {
+	return st.term.windowsize()
+}
+
+func (st *screenterm) refresh() {
+	st.term.refresh()
+}
+
+func (st *screenterm) clearline(y int) {
+	st.putcursor(0, y)
+	st.term.clearline(st.width)
+	st.putcursor(0, y)
+}
+
+func (st *screenterm) putcursor(x, y int) {
+	st.term.putcursor(st.x+x, st.y+y)
+}
+
+func (st *screenterm) Write(p []byte) (int, error) {
+	return st.term.Write(p)
+}
+
+/*
+ * generic terminal
+ */
 
 type terminal interface {
 	io.Writer
@@ -1293,7 +1336,7 @@ type terminal interface {
 	init() (func(), error)
 	windowsize() (int, int, error)
 	refresh()
-	clearline()
+	clearline(width int)
 	putcursor(x, y int)
 }
 
@@ -1316,8 +1359,8 @@ func (t *unixVT100term) refresh() {
 	fmt.Fprint(t, "\x1b[2J")
 }
 
-func (t *unixVT100term) clearline() {
-	fmt.Fprint(t, "\x1b[K")
+func (t *unixVT100term) clearline(width int) {
+	t.Write([]byte(strings.Repeat(" ", width)))
 }
 
 func (t *unixVT100term) putcursor(x, y int) {
