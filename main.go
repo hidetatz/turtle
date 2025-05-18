@@ -801,11 +801,16 @@ func (w *window) setsize(x, y, width, height int) {
 	w.y = y
 	w.width = width
 	w.height = height
-	w.screen.width = width
-	w.screen.height = height
-	w.screen.term.x = x
-	w.screen.term.y = y
-	w.screen.term.width = width
+
+	if w.isleaf() {
+		w.screen.width = width
+		w.screen.height = height
+		w.screen.term.x = x
+		w.screen.term.y = y
+		w.screen.term.width = width
+	} else {
+		w.resize()
+	}
 }
 
 func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file) *window {
@@ -815,15 +820,15 @@ func (w *window) split(term terminal, modechange func(mode mode), direction dire
 
 	if w.parent.isroot() && len(w.parent.children) == 1 {
 		w.parent.direction = direction
-		return w.parent._split(term, modechange, file)
+		return w.parent.addchild(term, modechange, file)
 	}
 
 	if w.parent.direction != direction {
 		w.direction = direction
-		return w._split(term, modechange, file)
+		return w.addchild(term, modechange, file)
 	}
 
-	return w.parent._split(term, modechange, file)
+	return w.parent.addchild(term, modechange, file)
 }
 
 func sum(ints []int) int {
@@ -834,7 +839,22 @@ func sum(ints []int) int {
 	return sum
 }
 
-func (w *window) _split(term terminal, modechange func(mode mode), file file) *window {
+func (w *window) addchild(term terminal, modechange func(mode mode), file file) *window {
+	if w.isleaf() {
+		// temporary window, size is set properly in resize()
+		w.children = append(w.children, &window{parent: w, screen: w.screen})
+		w.screen = nil
+	}
+
+	// temporary window, size is set properly in resize()
+	newwin := newwindow(term, 0, 0, 0, 0, file, modechange)
+	newwin.parent = w
+	w.children = append(w.children, newwin)
+	w.resize()
+	return newwin
+}
+
+func (w *window) resize() {
 	// divide the $width into $count items so that they are all the same length
 	// as much as possible. This considers splitter sign (| or -).
 	//
@@ -859,15 +879,9 @@ func (w *window) _split(term terminal, modechange func(mode mode), file file) *w
 		return result
 	}
 
-	if w.isleaf() {
-		w.children = append(w.children, &window{screen: w.screen, parent: w}) // temporary window, size is set properly below
-		w.screen = nil
-	}
-
-	var newwin *window
 	switch w.direction {
 	case right:
-		widths := div(w.width, len(w.children)+1)
+		widths := div(w.width, len(w.children))
 		for i := range w.children {
 			x := w.x + sum(widths[:i]) + 1*i
 			y := w.y
@@ -876,12 +890,8 @@ func (w *window) _split(term terminal, modechange func(mode mode), file file) *w
 			w.children[i].setsize(x, y, width, height)
 		}
 
-		newwinwidth := widths[len(widths)-1]
-		newwinx := w.x + sum(widths[:len(widths)-1]) + (1*len(widths) - 1)
-		newwin = newwindow(term, newwinx, w.y, newwinwidth, w.height, file, modechange)
-
 	case down:
-		heights := div(w.height, len(w.children)+1)
+		heights := div(w.height, len(w.children))
 		for i := range w.children {
 			x := w.x
 			y := w.y + sum(heights[:i]) + 1*i
@@ -890,17 +900,9 @@ func (w *window) _split(term terminal, modechange func(mode mode), file file) *w
 			w.children[i].setsize(x, y, width, height)
 		}
 
-		newwinheight := heights[len(heights)-1]
-		newwiny := w.y + sum(heights[:len(heights)-1]) + (1 * (len(heights) - 1))
-		newwin = newwindow(term, w.x, newwiny, w.width, newwinheight, file, modechange)
-
 	default:
 		panic("unexpected split direction")
 	}
-
-	newwin.parent = w
-	w.children = append(w.children, newwin)
-	return newwin
 }
 
 func (w *window) render(term *screenterm, first bool) {
@@ -911,6 +913,8 @@ func (w *window) render(term *screenterm, first bool) {
 
 	for i, child := range w.children {
 		child.render(term, first)
+
+		// add splitter line on non last window
 		if i != len(w.children)-1 {
 			if w.direction == right {
 				for j := range child.height {
@@ -928,6 +932,82 @@ func (w *window) render(term *screenterm, first bool) {
 	}
 }
 
+func (w *window) jump(direction direction) *window {
+	var dest *window
+	if w.parent.direction == right {
+		if direction == left {
+			dest = w.parent.previous(w)
+		}
+
+		if direction == right {
+			dest = w.parent.next(w)
+		}
+	} else {
+		if direction == up {
+			dest = w.parent.previous(w)
+		}
+
+		if direction == down {
+			dest = w.parent.next(w)
+		}
+	}
+
+	if dest == nil {
+		if w.parent.isroot() {
+			return w
+		}
+
+		return w.parent.jump(direction)
+	}
+
+	if dest == w && !w.parent.isroot() {
+		return w.parent.jump(direction)
+	}
+
+	for !dest.isleaf() {
+		dest = dest.children[0]
+	}
+
+	return dest
+}
+
+func (w *window) previous(base *window) *window {
+	idx := -1
+	for i, child := range w.children {
+		if child == base {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		panic("base window is not found in children")
+	}
+
+	if idx == 0 {
+		return nil
+	}
+	return w.children[idx-1]
+}
+
+func (w *window) next(base *window) *window {
+	idx := -1
+	for i, child := range w.children {
+		if child == base {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		panic("base window is not found in children")
+	}
+
+	if idx == len(w.children)-1 {
+		return nil
+	}
+	return w.children[idx+1]
+}
 func (w *window) String() string {
 	return w.string(0)
 }
@@ -947,7 +1027,7 @@ func (w *window) string(depth int) string {
 	} else {
 		f0("\n")
 		for _, child := range w.children {
-			f("%v\n", child.string(depth+2))
+			f0("%v\n", child.string(depth+2))
 		}
 		f2("]\n")
 	}
@@ -1008,6 +1088,10 @@ func (e *editor) split(filename string, direction direction) {
 	e.windowchanged = true
 }
 
+func (e *editor) jumpwin(direction direction) {
+	e.activewin = e.activewin.jump(direction)
+}
+
 func (e *editor) movecmdcursor(direction direction) {
 	switch direction {
 	case left:
@@ -1044,6 +1128,7 @@ func (e *editor) render(first bool) {
 
 	if e.windowchanged {
 		e.rootwin.render(e.term, true)
+		e.activewin.screen.render(first)
 	} else {
 		e.activewin.render(e.term, first)
 	}
@@ -1068,6 +1153,25 @@ func (e *editor) save() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (e *editor) String() string {
+	var sb strings.Builder
+	f := func(s string, a ...any) { sb.WriteString(fmt.Sprintf(s, a...)) }
+	f2 := func(s string, a ...any) { sb.WriteString("  " + fmt.Sprintf(s, a...)) }
+
+	f("[DEBUG] editor_state{\n")
+	f2("term: %v,\n", e.term)
+	f2("width: %v, height: %v, mode: %v, cmdline: '%v', cmdx: %v, msg: '%v'\n", e.width, e.height, e.mode, e.cmdline, e.cmdx, e.msg)
+	f2("rootwin: %v,\n", e.rootwin.string(1))
+	f2("activewin: {name: %v, x: %v, y: %v},\n", e.activewin.screen.file.Name(), e.activewin.x, e.activewin.y)
+	f("}")
+
+	return sb.String()
+}
+
+func (e *editor) debug() {
+	debug("%v\n", e)
 }
 
 func start(term terminal, in io.Reader, file *os.File) {
@@ -1130,7 +1234,7 @@ func start(term terminal, in io.Reader, file *os.File) {
 				e.movecmdcursor(right)
 
 			case _esc:
-				e.cmdline = newcommandline()
+				e.resetcmd()
 				e.changemode(normal)
 
 			case _bs:
@@ -1181,6 +1285,20 @@ func start(term terminal, in io.Reader, file *os.File) {
 
 		case normal:
 			switch buff.special {
+			case _ctrl_w:
+				input2 := reader.read()
+				switch {
+				case input2.r == 'h', input2.special == _ctrl_h, input2.special == _left:
+					e.jumpwin(left)
+				case input2.r == 'j', input2.special == _ctrl_j, input2.special == _down:
+					e.jumpwin(down)
+				case input2.r == 'k', input2.special == _ctrl_k, input2.special == _up:
+					e.jumpwin(up)
+				case input2.r == 'l', input2.special == _ctrl_l, input2.special == _right:
+					e.jumpwin(right)
+				default:
+					// do nothing
+				}
 			case _not_special_key:
 				switch buff.r {
 				case ':':
@@ -1207,7 +1325,7 @@ func start(term terminal, in io.Reader, file *os.File) {
 		}
 
 		e.render(false)
-		debug("%v\n", e.rootwin)
+		e.debug()
 	}
 
 finish:

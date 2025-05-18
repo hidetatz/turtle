@@ -46,6 +46,10 @@ By default, turtle editor is in normal mode.
 * `gs`: move to the current line head where non-space character exists
 * `Ctrl-u`: scroll up by half page
 * `Ctrl-d`: scroll down by half page
+* `Ctrl-w` `h`: move to left window
+* `Ctrl-w` `j`: move to below window
+* `Ctrl-w` `k`: move to above window
+* `Ctrl-w` `l`: move to right window
 
 ### command mode
 
@@ -77,7 +81,7 @@ Logs put via debug() are written to stderr as stdout is used by the editor itsel
 
 ```shell
 # run with stderr redirected to another file
-TURTLE_DEBUG=1 tt test.txt 2>log.txt
+TURTLE_DEBUG=1 tt README.md 2>log.txt
 
 # on another terminal, tail it
 tail -f log.txt
