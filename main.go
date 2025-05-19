@@ -419,6 +419,7 @@ func (s *screen) render(first bool) {
 	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
 	s.actualx = x - s.xoffset
 	s.changedlines = []int{}
+	s.scrolled = false
 }
 
 func (s *screen) handle(mode mode, buff *input, reader *reader) {
