@@ -437,20 +437,41 @@ func (s *screen) render(first bool) {
 }
 
 func (s *screen) handle(mode mode, buff *input, reader *reader) {
+	num := 1
+	isnum, n := buff.isnumber()
+	if mode == normal && isnum {
+		num = n
+		for {
+			next := reader.read()
+			isnum2, n2 := next.isnumber()
+			if !isnum2 {
+				buff = next
+				break
+			}
+
+			num *= 10
+			num += n2
+		}
+	}
+
+	if num == 0 {
+		num = 1
+	}
+
 	switch mode {
 	case normal:
 		switch buff.special {
 		case _left:
-			s.movecursor(left, 1)
+			s.movecursor(left, num)
 
 		case _down:
-			s.movecursor(down, 1)
+			s.movecursor(down, num)
 
 		case _up:
-			s.movecursor(up, 1)
+			s.movecursor(up, num)
 
 		case _right:
-			s.movecursor(right, 1)
+			s.movecursor(right, num)
 
 		case _ctrl_u:
 			move := (s.height - 1) / 2
@@ -489,6 +510,9 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 				s.insline(up)
 				s.x = 0
 				s.changemode(insert)
+
+			case 'G':
+				s.gotoline(num)
 
 			/*
 			 * goto mode
@@ -530,16 +554,17 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 				}
 
 			case 'h':
-				s.movecursor(left, 1)
+				s.movecursor(left, num)
 
 			case 'j':
-				s.movecursor(down, 1)
+				s.movecursor(down, num)
 
 			case 'k':
-				s.movecursor(up, 1)
+				s.movecursor(up, num)
 
 			case 'l':
-				s.movecursor(right, 1)
+				s.movecursor(right, num)
+
 			}
 
 		}
@@ -708,6 +733,14 @@ func (s *screen) gotolineheadch() {
 
 func (s *screen) gotolinehead() {
 	s.x = 0
+}
+
+func (s *screen) gotoline(line int) {
+	if len(s.lines) < line {
+		line = len(s.lines)
+	}
+
+	s.y = line - 1
 }
 
 // insert a line
@@ -1486,6 +1519,19 @@ func main() {
 type input struct {
 	r       rune
 	special key
+}
+
+func (i *input) isnumber() (bool, int) {
+	if i.special != _not_special_key {
+		return false, 0
+	}
+
+	n := int(i.r - '0')
+	if n < 0 || 9 < n {
+		return false, 0
+	}
+
+	return true, n
 }
 
 func (i *input) String() string {

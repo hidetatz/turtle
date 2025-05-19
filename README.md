@@ -30,6 +30,9 @@ By default, turtle editor is in normal mode.
 
 ### normal mode
 
+For some commands, leading number before command executes the command n-times.
+For example, `3j` moves the cursor down by 3 times.
+
 * `i`: enter insert mode
 * `:`: enter command mode
 * `h`: move left
@@ -41,6 +44,7 @@ By default, turtle editor is in normal mode.
 * `o`: insert a line **below** the current cursor, then enter insert mode
 * `O`: insert a line **above** the current cursor, then enter insert mode
 * `d`: delete a character
+* `<number> G`: move to the <number> line
 * `gg`: move to the text head
 * `ge`: move to the text bottom
 * `gh`: move to the current line head
