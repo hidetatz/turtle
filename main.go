@@ -923,82 +923,29 @@ func (w *window) render(term *screenterm, first bool) {
 	}
 }
 
-func (w *window) jump(direction direction) *window {
-	var dest *window
-	if w.parent.direction == right {
-		if direction == left {
-			dest = w.parent.previous(w)
-		}
-
-		if direction == right {
-			dest = w.parent.next(w)
-		}
-	} else {
-		if direction == up {
-			dest = w.parent.previous(w)
-		}
-
-		if direction == down {
-			dest = w.parent.next(w)
-		}
-	}
-
-	if dest == nil {
-		if w.parent.isroot() {
-			return w
-		}
-
-		return w.parent.jump(direction)
-	}
-
-	if dest == w && !w.parent.isroot() {
-		return w.parent.jump(direction)
-	}
-
-	for !dest.isleaf() {
-		dest = dest.children[0]
-	}
-
-	return dest
+func (w *window) actualcursor() (int, int) {
+	return w.x + w.screen.actualx, w.y + w.screen.y - w.screen.yoffset
 }
 
-func (w *window) previous(base *window) *window {
-	idx := -1
-	for i, child := range w.children {
-		if child == base {
-			idx = i
-			break
+func (w *window) getallleaves() []*window {
+	if w.isleaf() {
+		return []*window{w}
+	}
+
+	leaves := []*window{}
+	for _, child := range w.children {
+		if w.isleaf() {
+			leaves = append(leaves, child)
+			continue
 		}
+
+		leaves = append(leaves, child.getallleaves()...)
 	}
 
-	if idx == -1 {
-		panic("base window is not found in children")
-	}
-
-	if idx == 0 {
-		return nil
-	}
-	return w.children[idx-1]
+	return leaves
 }
 
-func (w *window) next(base *window) *window {
-	idx := -1
-	for i, child := range w.children {
-		if child == base {
-			idx = i
-			break
-		}
-	}
 
-	if idx == -1 {
-		panic("base window is not found in children")
-	}
-
-	if idx == len(w.children)-1 {
-		return nil
-	}
-	return w.children[idx+1]
-}
 func (w *window) String() string {
 	return w.string(0)
 }
@@ -1083,7 +1030,60 @@ func (e *editor) split(filename string, direction direction) {
 }
 
 func (e *editor) jumpwin(direction direction) {
-	e.activewin = e.activewin.jump(direction)
+	// cursor
+	x, y := e.activewin.actualcursor()
+	leaves := e.rootwin.getallleaves()
+
+	var candidate *window
+	for _, leaf := range leaves {
+		if leaf == e.activewin {
+			continue
+		}
+
+		switch direction {
+		case left:
+			if x < leaf.x || y < leaf.y || leaf.y+leaf.height < y {
+				continue
+			}
+
+			if candidate == nil || candidate.x < leaf.x {
+				candidate = leaf
+			}
+
+		case right:
+			if leaf.x+leaf.width < x || y < leaf.y || leaf.y+leaf.height < y {
+				continue
+			}
+
+			if candidate == nil || leaf.x < candidate.x {
+				candidate = leaf
+			}
+
+		case up:
+			if y < leaf.y || x < leaf.x || leaf.x+leaf.width < x {
+				continue
+			}
+
+			if candidate == nil || candidate.y < leaf.y {
+				candidate = leaf
+			}
+
+		case down:
+			if leaf.y+leaf.height < y || x < leaf.x || leaf.x+leaf.width < x {
+				continue
+			}
+
+			if candidate == nil || leaf.y < candidate.y {
+				candidate = leaf
+			}
+		}
+	}
+
+	if candidate == nil {
+		return
+	}
+
+	e.activewin = candidate
 }
 
 func (e *editor) movecmdcursor(direction direction) {
