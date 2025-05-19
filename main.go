@@ -1044,9 +1044,11 @@ func (w *window) getallleaves() []*window {
 
 func (w *window) close() *window {
 	if w.isroot() {
+		w.screen.file.Close()
 		return nil
 	}
 
+	w.screen.file.Close()
 	next := w.parent.removechild(w)
 	if len(w.parent.children) == 1 {
 		w.parent.toleaf()
@@ -1351,8 +1353,6 @@ func start(term terminal, in io.Reader, file *os.File) {
 	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode })
 	e.activewin = e.rootwin
 	e.render(true)
-
-	defer e.activewin.screen.file.Close()
 
 	/*
 	 * start editor main routine
