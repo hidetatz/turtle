@@ -244,6 +244,8 @@ type screen struct {
 	scrolled     bool
 	changedlines []int
 	changemode   func(mode mode)
+
+	dirty bool
 }
 
 func newscreen(term terminal, x, y, width, height int, file file, changemode func(mode mode)) *screen {
@@ -676,6 +678,7 @@ func (s *screen) insline(direction direction) {
 	for i := s.y; i < len(s.lines); i++ {
 		s.changedlines = append(s.changedlines, i)
 	}
+	s.dirty = true
 }
 
 // insert characters
@@ -686,17 +689,20 @@ func (s *screen) inschars(chars []*character) {
 func (s *screen) inscharsat(chars []*character, at int) {
 	s.curline().inschars(chars, at)
 	s.changedlines = append(s.changedlines, s.y)
+	s.dirty = true
 }
 
 // delete a char on (idx, s.y)
 func (s *screen) delcharat(idx int) {
 	s.curline().delchar(idx)
 	s.changedlines = append(s.changedlines, s.y)
+	s.dirty = true
 }
 
 // delete current cursor character
 func (s *screen) delchar() {
 	s.delcharat(s.xidx())
+	s.dirty = true
 }
 
 // delete a line
@@ -733,6 +739,7 @@ func (s *screen) joinlines(from, to int) {
 	}
 
 	s.changedlines = append(s.changedlines, from)
+	s.dirty = true
 }
 
 func (s *screen) clearline() {
@@ -755,6 +762,17 @@ func (s *screen) content() []byte {
 		}
 	}
 	return buf
+}
+
+func (s *screen) save() {
+	content := s.content()
+	s.file.Truncate(0)
+	s.file.Seek(0, 0)
+	_, err := s.file.Write([]byte(content))
+	if err != nil {
+		panic(err)
+	}
+	s.dirty = false
 }
 
 /*
@@ -1130,6 +1148,16 @@ func (e *editor) jumpwin(direction direction) {
 }
 
 func (e *editor) closewin() {
+	if e.activewin.screen.dirty {
+		e.msg = newline(fmt.Sprintf("unsaved change remaining: '%v'", e.activewin.screen.file.Name()))
+		return
+	}
+
+	e.activewin = e.activewin.close()
+	e.windowchanged = true
+}
+
+func (e *editor) closewinforce() {
 	e.activewin = e.activewin.close()
 	e.windowchanged = true
 }
@@ -1188,13 +1216,7 @@ func (e *editor) resetcmd() {
 }
 
 func (e *editor) save() {
-	content := e.activewin.screen.content()
-	e.activewin.screen.file.Truncate(0)
-	e.activewin.screen.file.Seek(0, 0)
-	_, err := e.activewin.screen.file.Write([]byte(content))
-	if err != nil {
-		panic(err)
-	}
+	e.activewin.screen.save()
 }
 
 func (e *editor) String() string {
@@ -1291,6 +1313,14 @@ func start(term terminal, in io.Reader, file *os.File) {
 					e.resetcmd()
 					e.changemode(normal)
 					e.closewin()
+					if e.activewin == nil {
+						goto finish
+					}
+
+				case e.cmdline.equal("q!"):
+					e.resetcmd()
+					e.changemode(normal)
+					e.closewinforce()
 					if e.activewin == nil {
 						goto finish
 					}
