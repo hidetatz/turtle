@@ -771,14 +771,7 @@ type window struct {
 	direction direction // down or right
 }
 
-func newrootwindow(s *screen) *window {
-	root := &window{x: 0, y: 0, width: s.width, height: s.height, parent: nil}
-	child := &window{x: 0, y: 0, width: s.width, height: s.height, screen: s, parent: root}
-	root.children = []*window{child}
-	return root
-}
-
-func newwindow(term terminal, x, y, width, height int, file file, modechange func(mode mode)) *window {
+func newleafwindow(term terminal, x, y, width, height int, file file, modechange func(mode mode)) *window {
 	return &window{
 		x:      x,
 		y:      y,
@@ -796,7 +789,95 @@ func (w *window) isleaf() bool {
 	return len(w.children) == 0
 }
 
-func (w *window) setsize(x, y, width, height int) {
+func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file) *window {
+	// when the given directions is the same with parent window, add new window as sibling of w.
+	if w.parent != nil && w.parent.direction == direction {
+		return w.parent.inschildafter(w, term, modechange, file)
+	}
+
+	// when no parent exists (= w is root) or exists but direction is different,
+	// make the leaf window w to inner window, then add new window as child.
+	w.toinner(direction)
+	return w.inschildafter(w.children[0], term, modechange, file)
+}
+
+func (w *window) toinner(direction direction) {
+	// make leaf node to inner node
+	if !w.isleaf() {
+		panic("toinner is called on non-leaf window")
+	}
+
+	w.direction = direction
+	w.children = []*window{{parent: w, screen: w.screen}}
+	w.screen = nil
+}
+
+func (w *window) inschildafter(after *window, term terminal, modechange func(mode mode), file file) *window {
+	// insert a child node after $after then do resize.
+	newwin := newleafwindow(term, 0, 0, 0, 0, file, modechange)
+	newwin.parent = w
+	idx := slices.Index(w.children, after)
+	if idx == -1 {
+		panic("cannot find a given child node in the children")
+	}
+
+	w.children = slices.Insert(w.children, idx+1, newwin)
+	w.resizechildren()
+	return newwin
+}
+
+func (w *window) resizechildren() {
+	// divide the $total into $count items so that they are all the same length
+	// as much as possible. This considers splitter sign (| or -).
+	//
+	// suppose total is 30, count is 4, then
+	//    7   |   7   |   7   |   6   (7 + 7 + 7 + 6 + 3(splitter) = 30)
+	// AAAAAAA|BBBBBBB|CCCCCCC|DDDDDD
+	// is expected (| sign is window splitter).
+	f := func(total, count int) []int {
+		total -= count - 1
+		result := make([]int, count)
+		for i := range count {
+			_mod := total % (count - i)
+			_div := total / (count - i)
+			if _mod == 0 {
+				result[i] = _div
+				total -= _div
+			} else {
+				result[i] = _div + 1
+				total -= _div + 1
+			}
+		}
+		return result
+	}
+
+	sum := func(ints []int) int {
+		s := 0
+		for i := range ints {
+			s += ints[i]
+		}
+		return s
+	}
+
+	switch w.direction {
+	case right:
+		widths := f(w.width, len(w.children))
+		for i := range w.children {
+			w.children[i].changesize(w.x+sum(widths[:i])+1*i, w.y, widths[i], w.height)
+		}
+
+	case down:
+		heights := f(w.height, len(w.children))
+		for i := range w.children {
+			w.children[i].changesize(w.x, w.y+sum(heights[:i])+1*i, w.width, heights[i])
+		}
+
+	default:
+		panic("unexpected split direction")
+	}
+}
+
+func (w *window) changesize(x, y, width, height int) {
 	w.x = x
 	w.y = y
 	w.width = width
@@ -809,99 +890,8 @@ func (w *window) setsize(x, y, width, height int) {
 		w.screen.term.y = y
 		w.screen.term.width = width
 	} else {
-		w.resize()
-	}
-}
-
-func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file) *window {
-	if direction != down && direction != right {
-		panic("unexpected direction to split")
-	}
-
-	if w.parent.isroot() && len(w.parent.children) == 1 {
-		w.parent.direction = direction
-		return w.parent.addchild(term, modechange, file)
-	}
-
-	if w.parent.direction != direction {
-		w.direction = direction
-		return w.addchild(term, modechange, file)
-	}
-
-	return w.parent.addchild(term, modechange, file)
-}
-
-func sum(ints []int) int {
-	sum := 0
-	for i := range ints {
-		sum += ints[i]
-	}
-	return sum
-}
-
-func (w *window) addchild(term terminal, modechange func(mode mode), file file) *window {
-	if w.isleaf() {
-		// temporary window, size is set properly in resize()
-		w.children = append(w.children, &window{parent: w, screen: w.screen})
-		w.screen = nil
-	}
-
-	// temporary window, size is set properly in resize()
-	newwin := newwindow(term, 0, 0, 0, 0, file, modechange)
-	newwin.parent = w
-	w.children = append(w.children, newwin)
-	w.resize()
-	return newwin
-}
-
-func (w *window) resize() {
-	// divide the $width into $count items so that they are all the same length
-	// as much as possible. This considers splitter sign (| or -).
-	//
-	// suppose total is 30, count is 4, then
-	//    7   |   7   |   7   |   6   (7 + 7 + 7 + 6 + 3(splitter) = 30)
-	// AAAAAAA|BBBBBBB|CCCCCCC|DDDDDD
-	// is expected (| sign is window splitter).
-	div := func(width, count int) []int {
-		width -= count - 1
-		result := make([]int, count)
-		for i := range count {
-			_mod := width % (count - i)
-			_div := width / (count - i)
-			if _mod == 0 {
-				result[i] = _div
-				width -= _div
-			} else {
-				result[i] = _div + 1
-				width -= _div + 1
-			}
-		}
-		return result
-	}
-
-	switch w.direction {
-	case right:
-		widths := div(w.width, len(w.children))
-		for i := range w.children {
-			x := w.x + sum(widths[:i]) + 1*i
-			y := w.y
-			width := widths[i]
-			height := w.height
-			w.children[i].setsize(x, y, width, height)
-		}
-
-	case down:
-		heights := div(w.height, len(w.children))
-		for i := range w.children {
-			x := w.x
-			y := w.y + sum(heights[:i]) + 1*i
-			width := w.width
-			height := heights[i]
-			w.children[i].setsize(x, y, width, height)
-		}
-
-	default:
-		panic("unexpected split direction")
+		// when parent node size is changed, children size must be changed accordingly
+		w.resizechildren()
 	}
 }
 
@@ -1070,7 +1060,10 @@ func (e *editor) hsplit(filename string) {
 }
 
 func (e *editor) split(filename string, direction direction) {
-	// todo: this should handle new file
+	if direction != down && direction != right {
+		panic("unexpected direction to split")
+	}
+
 	_, err := os.Stat(filename)
 	if err != nil {
 		e.msg = newline(fmt.Sprintf("file not found: '%v'", filename))
@@ -1205,8 +1198,8 @@ func start(term terminal, in io.Reader, file *os.File) {
 		msg:     newemptyline(),
 	}
 
-	e.rootwin = newrootwindow(newscreen(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode }))
-	e.activewin = e.rootwin.children[0]
+	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode })
+	e.activewin = e.rootwin
 	e.render(true)
 
 	defer e.activewin.screen.file.Close()
