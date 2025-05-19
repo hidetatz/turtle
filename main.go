@@ -82,6 +82,18 @@ func (c *character) isspace() bool {
 	return c.r == ' ' || c.tab
 }
 
+func (c *character) equal(c2 *character) bool {
+	if c.tab {
+		return c2.tab
+	}
+
+	if c.nl {
+		return c2.nl
+	}
+
+	return c.r == c2.r
+}
+
 func (c *character) String() string {
 	return c.str
 }
@@ -505,6 +517,18 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 					// do nothing
 				}
 
+			case 'f':
+				input2 := reader.read()
+				if input2.special == _not_special_key {
+					s.movetonextch(newCharacter(input2.r))
+				}
+
+			case 'F':
+				input2 := reader.read()
+				if input2.special == _not_special_key {
+					s.movetoprevch(newCharacter(input2.r))
+				}
+
 			case 'h':
 				s.movecursor(left, 1)
 
@@ -634,6 +658,28 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	default:
 		panic("invalid direction is passed")
 	}
+}
+
+func (s *screen) movetonextch(c *character) {
+	line := s.curline()
+	for i := s.xidx() + 1; i < line.length(); i++ {
+		if line.buffer[i].equal(c) {
+			s.x = line.widthto(i)
+			break
+		}
+	}
+	// if c is not found, do not move
+}
+
+func (s *screen) movetoprevch(c *character) {
+	line := s.curline()
+	for i := s.xidx() - 1; 0 <= i; i-- {
+		if line.buffer[i].equal(c) {
+			s.x = line.widthto(i)
+			break
+		}
+	}
+	// if c is not found, do not move
 }
 
 func (s *screen) gototopleft() {
