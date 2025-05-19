@@ -945,6 +945,49 @@ func (w *window) getallleaves() []*window {
 	return leaves
 }
 
+func (w *window) close() *window {
+	if w.isroot() {
+		return nil
+	}
+
+	next := w.parent.removechild(w)
+	if len(w.parent.children) == 1 {
+		w.parent.toleaf()
+		return w.parent
+	}
+
+	return next
+}
+
+func (w *window) toleaf() {
+	w.screen = w.children[0].screen
+	w.children = []*window{}
+	w.direction = 0
+}
+
+func (w *window) removechild(child *window) *window {
+	idx := slices.Index(w.children, child)
+	if idx == -1 {
+		panic("cannot find a given child node to remove in the children")
+	}
+	w.children = slices.Delete(w.children, idx, idx+1)
+	w.resizechildren()
+
+	idx = max(0, idx-1)
+
+	if w.children[idx].isleaf() {
+		return w.children[idx]
+	}
+
+	return w.children[idx].firstleaf()
+}
+
+func (w *window) firstleaf() *window {
+	if w.children[0].isleaf() {
+		return w.children[0]
+	}
+	return w.children[0].firstleaf()
+}
 
 func (w *window) String() string {
 	return w.string(0)
@@ -1084,6 +1127,11 @@ func (e *editor) jumpwin(direction direction) {
 	}
 
 	e.activewin = candidate
+}
+
+func (e *editor) closewin() {
+	e.activewin = e.activewin.close()
+	e.windowchanged = true
 }
 
 func (e *editor) movecmdcursor(direction direction) {
@@ -1241,7 +1289,11 @@ func start(term terminal, in io.Reader, file *os.File) {
 				switch {
 				case e.cmdline.equal("q"):
 					e.resetcmd()
-					goto finish
+					e.changemode(normal)
+					e.closewin()
+					if e.activewin == nil {
+						goto finish
+					}
 
 				case e.cmdline.hasprefix("vs "):
 					filename := e.cmdline.trimprefix("vs ")

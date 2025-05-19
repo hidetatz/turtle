@@ -55,7 +55,7 @@ By default, turtle editor is in normal mode.
 
 Every command is executed after Enter keypress.
 
-* `q`: close the editor
+* `q`: close the current buffer
 * `w`: save the buffer (beta)
 * `wq`: save the buffer (beta) and close the editor
 * `vs filename`: opens a new file in vertically split window.
