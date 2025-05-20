@@ -239,11 +239,12 @@ type file interface {
 }
 
 type screen struct {
-	term   *screenterm
-	width  int
-	height int
-	lines  []*line
-	file   file
+	term            *screenterm
+	width           int
+	height          int
+	lines           []*line
+	file            file
+	linenumberwidth int
 
 	// current desired cursor position. might be different with the actual position.
 	x int
@@ -284,7 +285,30 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 		s.lines = []*line{newemptyline()}
 	}
 
+	s.updatelinenumberwidth()
+
 	return s
+}
+
+func (s *screen) updatelinenumberwidth() {
+	if len(s.lines) < 10000 {
+		s.linenumberwidth = 4
+		return
+	}
+
+	s.linenumberwidth = calcdigit(len(s.lines))
+}
+
+func calcdigit(n int) int {
+	digit := 0
+	for {
+		n /= 10
+		digit++
+		if n == 0 {
+			break
+		}
+	}
+	return digit
 }
 
 func (s *screen) statusline() *line {
@@ -397,14 +421,19 @@ func (s *screen) render(first bool) {
 		scrolled = true
 	}
 
+	displine := func(y int) string {
+		line := s.lines[y]
+		linenumber := fmt.Sprintf("%v%v", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
+		return fmt.Sprintf("%v %v", linenumber, line.cut(s.xoffset, s.width-s.linenumberwidth+1))
+	}
+
 	/* update texts */
 	if scrolled || s.scrolled || first {
 		// update all lines
 		for i := range s.height - 1 {
 			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
-				line := s.lines[s.yoffset+i]
-				fmt.Fprint(s.term, line.cut(s.xoffset, s.width))
+				fmt.Fprint(s.term, displine(s.yoffset+i))
 			}
 		}
 	} else if len(s.changedlines) != 0 {
@@ -420,8 +449,7 @@ func (s *screen) render(first bool) {
 			s.term.clearline(l - s.yoffset)
 
 			if l <= len(s.lines)-1 {
-				line := s.lines[l].cut(s.xoffset, s.width)
-				fmt.Fprint(s.term, line)
+				fmt.Fprint(s.term, displine(l))
 			}
 		}
 	}
@@ -430,8 +458,8 @@ func (s *screen) render(first bool) {
 	s.term.clearline(s.height - 1)
 	fmt.Fprint(s.term, s.statusline().cut(0, s.width))
 
-	s.term.putcursor(x-s.xoffset, s.y-s.yoffset)
-	s.actualx = x - s.xoffset
+	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
+	s.actualx = x - s.xoffset + s.linenumberwidth + 1
 	s.changedlines = []int{}
 	s.scrolled = false
 }
@@ -758,6 +786,7 @@ func (s *screen) insline(direction direction) {
 		s.changedlines = append(s.changedlines, i)
 	}
 	s.dirty = true
+	s.updatelinenumberwidth()
 }
 
 // insert characters
@@ -776,6 +805,7 @@ func (s *screen) delcharat(idx int) {
 	s.curline().delchar(idx)
 	s.changedlines = append(s.changedlines, s.y)
 	s.dirty = true
+	s.updatelinenumberwidth()
 }
 
 // delete current cursor character
@@ -790,11 +820,12 @@ func (s *screen) delline(y int) {
 		s.changedlines = append(s.changedlines, i)
 	}
 	s.lines = slices.Delete(s.lines, y, y+1)
+	s.updatelinenumberwidth()
 }
 
 // return x character index from the current cursor position on screen
 func (s *screen) xidx() int {
-	return s.curline().charidx(s.actualx, s.xoffset)
+	return s.curline().charidx(s.actualx-s.linenumberwidth-1, s.xoffset)
 }
 
 // ensure current s.x is pointing on the correct character position.
@@ -819,6 +850,7 @@ func (s *screen) joinlines(from, to int) {
 
 	s.changedlines = append(s.changedlines, from)
 	s.dirty = true
+	s.updatelinenumberwidth()
 }
 
 func (s *screen) clearline() {
