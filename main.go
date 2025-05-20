@@ -1351,7 +1351,7 @@ func (e *editor) debug() {
 	debug("%v\n", e)
 }
 
-func start(term terminal, in io.Reader, file *os.File) {
+func start(term terminal, in io.Reader, file file) {
 	fin, err := term.init()
 	if err != nil {
 		fin()
