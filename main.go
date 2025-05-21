@@ -340,8 +340,8 @@ func (s *screen) render(first bool) {
 		}
 
 		// too right, scroll right
-		if s.xoffset+s.width-1 < x+xpad {
-			if s.curline().width()-1 < x+xpad && x <= s.xoffset+s.width-1 {
+		if s.xoffset+s.width-(s.linenumberwidth+1)-1 < x+xpad {
+			if s.curline().width()-1 < x+xpad && x <= s.xoffset+s.width-(s.linenumberwidth+1)-1 {
 				// too right but no enough space right
 				return 0
 			}
@@ -424,7 +424,7 @@ func (s *screen) render(first bool) {
 	displine := func(y int) string {
 		line := s.lines[y]
 		linenumber := fmt.Sprintf("%v%v", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
-		return fmt.Sprintf("%v %v", linenumber, line.cut(s.xoffset, s.width-s.linenumberwidth+1))
+		return fmt.Sprintf("%v %v", linenumber, line.cut(s.xoffset, s.width-1-(s.linenumberwidth+1)))
 	}
 
 	/* update texts */
@@ -456,7 +456,7 @@ func (s *screen) render(first bool) {
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	fmt.Fprint(s.term, s.statusline().cut(0, s.width))
+	fmt.Fprint(s.term, s.statusline().cut(0, s.width-(s.linenumberwidth+1)))
 
 	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
