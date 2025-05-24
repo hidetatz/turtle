@@ -340,13 +340,8 @@ func replandcolorize(s, repl string, color int) string {
 
 type nophighlighter struct{}
 
-func (h nophighlighter) hlcomment(s string) string {
-	return s
-}
-
-func (h nophighlighter) hl(s string) string {
-	return s
-}
+func (h nophighlighter) hlcomment(s string) string { return s }
+func (h nophighlighter) hl(s string) string        { return s }
 
 /* golang highlighter */
 
