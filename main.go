@@ -903,6 +903,11 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 				s.delcharat(s.xidx() - 1)
 			}
 
+		case _tab:
+			s.alignx()
+			s.inschars([]*character{newCharacter('\t')})
+			s.movecursor(right, 1)
+
 		case _not_special_key:
 			s.alignx()
 			s.inschars([]*character{newCharacter(buff.r)})
