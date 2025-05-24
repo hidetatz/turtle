@@ -43,6 +43,7 @@ For example, `3j` moves the cursor down by 3 times.
 * `l`: move right
 * `f <character>`: find and move to the **next** \<character\> on the current line
 * `F <character>`: find and move to the **previous** \<character\> on the current line
+* `r <character>`: replace current character with \<character\>
 * `o`: insert a line **below** the current cursor, then enter insert mode
 * `O`: insert a line **above** the current cursor, then enter insert mode
 * `d`: delete a character

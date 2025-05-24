@@ -171,6 +171,10 @@ func (l *line) widthto(idx int) int {
 	return x
 }
 
+func (l *line) replacech(ch *character, at int) {
+	l.buffer[at] = ch
+}
+
 func (l *line) inschars(chars []*character, at int) {
 	for i := range chars {
 		l.buffer = slices.Insert(l.buffer, at+i, chars[i])
@@ -836,6 +840,12 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 					s.movetoprevch(newCharacter(input2.r))
 				}
 
+			case 'r':
+				input2 := reader.read()
+				if input2.special == _not_special_key {
+					s.replacech(newCharacter(input2.r))
+				}
+
 			case 'h':
 				s.movecursor(left, num)
 
@@ -1071,6 +1081,12 @@ func (s *screen) delcharat(idx int) {
 // delete current cursor character
 func (s *screen) delchar() {
 	s.delcharat(s.xidx())
+	s.dirty = true
+}
+
+func (s *screen) replacech(ch *character) {
+	s.curline().replacech(ch, s.xidx())
+	s.changedlines = append(s.changedlines, s.y)
 	s.dirty = true
 }
 
