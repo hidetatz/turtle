@@ -497,6 +497,8 @@ type screen struct {
 	file            file
 	linenumberwidth int
 
+	yankedch *character
+
 	// current desired cursor position. might be different with the actual position.
 	x int
 	y int
@@ -846,6 +848,16 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 					s.replacech(newCharacter(input2.r))
 				}
 
+			case 'y':
+				s.yankch()
+
+			case 'p':
+				if s.yankedch != nil {
+					s.alignx()
+					s.inschars([]*character{s.yankedch})
+					s.movecursor(right, 1)
+				}
+
 			case 'h':
 				s.movecursor(left, num)
 
@@ -1088,6 +1100,14 @@ func (s *screen) replacech(ch *character) {
 	s.curline().replacech(ch, s.xidx())
 	s.changedlines = append(s.changedlines, s.y)
 	s.dirty = true
+}
+
+func (s *screen) yankch() {
+	s.yankedch = s.curline().buffer[s.xidx()]
+}
+
+func (s *screen) pastech() {
+	s.yankedch = s.curline().buffer[s.xidx()]
 }
 
 // delete a line
