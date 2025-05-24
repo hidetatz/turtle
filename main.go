@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -205,8 +206,17 @@ func (l *line) empty() bool {
 	return l.length() == 1 && l.buffer[0].nl
 }
 
-func (l *line) cut(from, limit int) string {
+func (l *line) hasprefix(prefix string) bool {
+	return strings.HasPrefix(l.String(), prefix)
+}
+
+func (l *line) trimprefix(prefix string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(l.String(), prefix), " ")
+}
+
+func (l *line) hlandcut(hl highlighter, from, limit int) string {
 	s := l.String()
+
 	// todo: consider containing fullwidth char case
 	length := len(s)
 
@@ -216,15 +226,251 @@ func (l *line) cut(from, limit int) string {
 
 	to := min(length, from+limit)
 
-	return s[from:to]
+	if lineComment.MatchString(s) || multiLineComment.MatchString(s) {
+		return hl.hlcomment(s[from:to])
+	}
+
+	return hl.hl(s[from:to])
 }
 
-func (l *line) hasprefix(prefix string) bool {
-	return strings.HasPrefix(l.String(), prefix)
+/* highlighter */
+
+var (
+	/* golang */
+
+	lineComment      = regexp.MustCompile(`^(.*)//(.*)$`)
+	multiLineComment = regexp.MustCompile(`^(.*)/\*(.*)\*/(.*)$`)
+
+	_number = regexp.MustCompile(`(\d+)`)
+
+	_package     = regexp.MustCompile(`^(.*)package(\s.*)$`)
+	_import      = regexp.MustCompile(`^(.*)import(\s.*)$`)
+	_func        = regexp.MustCompile(`^(.*)func(\s.*)$`)
+	_defer       = regexp.MustCompile(`^(\s+)defer(\s.*)$`)
+	_return      = regexp.MustCompile(`^(\s+)return(\s.*)$`)
+	_for         = regexp.MustCompile(`^(\s+)for(\s.*)$`)
+	_range       = regexp.MustCompile(`^(.+\s)range(\s.*)$`)
+	_break       = regexp.MustCompile(`^(\s+)break(;?)$`)
+	_continue    = regexp.MustCompile(`^(\s+)continue(;?)$`)
+	_if          = regexp.MustCompile(`^(\s+)if(\s.*)$`)
+	_else        = regexp.MustCompile(`^(.*)else(\s.*)$`)
+	_var         = regexp.MustCompile(`^(\s*)var(\s.*)$`)
+	_const       = regexp.MustCompile(`^(\s*)const(\s.*)$`)
+	_switch      = regexp.MustCompile(`^(\s+)switch(\s.*)$`)
+	_case        = regexp.MustCompile(`^(\s+)case(\s.*)$`)
+	_goto        = regexp.MustCompile(`^(\s+)goto(\s.*)$`)
+	_fallthrough = regexp.MustCompile(`^(\s+)fallthrough(;?)$`)
+	_default     = regexp.MustCompile(`^(\s+)default(.*)$`)
+	_type        = regexp.MustCompile(`^(.*\s?)type(\s.*)$`)
+	_struct      = regexp.MustCompile(`^(.+)struct(\s.*)$`)
+	_interface   = regexp.MustCompile(`^(.+)interface(\s.*)$`)
+	_map         = regexp.MustCompile(`^(.+)map(.*)$`)
+	_select      = regexp.MustCompile(`^(\s+)select(\s.*)$`)
+	_go          = regexp.MustCompile(`^(\s+)go(\s.*)$`)
+	_chan        = regexp.MustCompile(`^(.+)chan(\s.*)$`)
+	_true        = regexp.MustCompile(`^(.+)true(.*)$`)
+	_false       = regexp.MustCompile(`^(.+)false(.*)$`)
+
+	_bool       = regexp.MustCompile(`^(.+)bool(\s.*)$`)
+	_uint8      = regexp.MustCompile(`^(.+)uint8(\s.*)$`)
+	_uint16     = regexp.MustCompile(`^(.+)uint16(\s.*)$`)
+	_uint32     = regexp.MustCompile(`^(.+)uint32(\s.*)$`)
+	_uint64     = regexp.MustCompile(`^(.+)uint64(\s.*)$`)
+	_int8       = regexp.MustCompile(`^(.+)int8(\s.*)$`)
+	_int16      = regexp.MustCompile(`^(.+)int16(\s.*)$`)
+	_int32      = regexp.MustCompile(`^(.+)int32(\s.*)$`)
+	_int64      = regexp.MustCompile(`^(.+)int64(\s.*)$`)
+	_float32    = regexp.MustCompile(`^(.+)float32(\s.*)$`)
+	_float64    = regexp.MustCompile(`^(.+)float64(\s.*)$`)
+	_complex64  = regexp.MustCompile(`^(.+)complex64(\s.*)$`)
+	_complex128 = regexp.MustCompile(`^(.+)complex128(\s.*)$`)
+	_string     = regexp.MustCompile(`^(.+)string(\s.*)$`)
+	_int        = regexp.MustCompile(`^(.+)int(\s.*)$`)
+	_uint       = regexp.MustCompile(`^(.+)uint(\s.*)$`)
+	_uintptr    = regexp.MustCompile(`^(.+)uintptr(\s.*)$`)
+	_byte       = regexp.MustCompile(`^(.+)byte(\s.*)$`)
+	_rune       = regexp.MustCompile(`^(.+)rune(\s.*)$`)
+	_any        = regexp.MustCompile(`^(.+)any(\s.*)$`)
+	_error      = regexp.MustCompile(`^(.+)error(\s.*)$`)
+	_comparable = regexp.MustCompile(`^(.+)comparable(\s.*)$`)
+	_iota       = regexp.MustCompile(`^(.+)iota(\s.*)$`)
+	_nil        = regexp.MustCompile(`^(.+)nil(\s.*)$`)
+
+	_append  = regexp.MustCompile(`^(.+)append(\(.*)$`)
+	_copy    = regexp.MustCompile(`^(.+)copy(\(.*)$`)
+	_delete  = regexp.MustCompile(`^(.+)delete(\(.*)$`)
+	_len     = regexp.MustCompile(`^(.+)len(\(.*)$`)
+	_cap     = regexp.MustCompile(`^(.+)cap(\(.*)$`)
+	_make    = regexp.MustCompile(`^(.+)make(\(.*)$`)
+	_max     = regexp.MustCompile(`^(.+)max(\(.*)$`)
+	_min     = regexp.MustCompile(`^(.+)min(\(.*)$`)
+	_new     = regexp.MustCompile(`^(.+)new(\(.*)$`)
+	_complex = regexp.MustCompile(`^(.+)complex(\(.*)$`)
+	_real    = regexp.MustCompile(`^(.+)real(\(.*)$`)
+	_imag    = regexp.MustCompile(`^(.+)imag(\(.*)$`)
+	_clear   = regexp.MustCompile(`^(.+)clear(\(.*)$`)
+	_close   = regexp.MustCompile(`^(.+)close(\(.*)$`)
+	_panic   = regexp.MustCompile(`^(.+)panic(\(.*)$`)
+	_recover = regexp.MustCompile(`^(.+)recover(\(.*)$`)
+	_print   = regexp.MustCompile(`^(.+)print(\(.*)$`)
+	_println = regexp.MustCompile(`^(.+)println(\(.*)$`)
+)
+
+type highlighter interface {
+	hl(s string) string
+	hlcomment(s string) string
 }
 
-func (l *line) trimprefix(prefix string) string {
-	return strings.TrimSuffix(strings.TrimPrefix(l.String(), prefix), " ")
+func colorize(s string, color int) string {
+	return fmt.Sprintf("\x1b[38;5;%dm%v\x1b[0m", color, s)
+}
+
+// do colorize with 2 surround capture groups
+func colorize2(s string, r *regexp.Regexp, repl string, color int) string {
+	return r.ReplaceAllString(s, fmt.Sprintf("${1}\x1b[38;5;%dm%v\x1b[0m${2}", color, repl))
+}
+
+func replandcolorize(s, repl string, color int) string {
+	return strings.ReplaceAll(s, repl, colorize(repl, color))
+}
+
+type nophighlighter struct{}
+
+func (h nophighlighter) hlcomment(s string) string {
+	return s
+}
+
+func (h nophighlighter) hl(s string) string {
+	return s
+}
+
+/* golang highlighter */
+
+type golanghighlighter struct{}
+
+func (h golanghighlighter) hlcomment(s string) string {
+	commentcolor := 247
+	s = lineComment.ReplaceAllString(s, fmt.Sprintf("${1}\x1b[38;5;%dm//${2}\x1b[0m", commentcolor))
+	s = multiLineComment.ReplaceAllString(s, fmt.Sprintf("${1}\x1b[38;5;%dm/*${2}*/\x1b[0m${3}", commentcolor))
+	return s
+}
+
+func (h golanghighlighter) hl(s string) string {
+	var (
+		colorParen       = 67
+		colorSign        = 38
+		colorKeyword     = 74
+		colorType        = 81
+		colorBuiltinFunc = 117
+	)
+	// colors code:
+	// for i in {0..256} ; do printf "\e[38;5;${i}m%3d \e[0m" $i ; [ $((i % 16)) -eq 0 ] && echo ; done
+
+	s = replandcolorize(s, "[", colorParen) // must be at the top to prevent replacing escape seq
+	s = replandcolorize(s, "]", colorParen)
+	s = replandcolorize(s, "(", colorParen)
+	s = replandcolorize(s, ")", colorParen)
+	s = replandcolorize(s, "{", colorParen)
+	s = replandcolorize(s, "}", colorParen)
+
+	s = replandcolorize(s, "+", colorSign)
+	s = replandcolorize(s, "-", colorSign)
+	s = replandcolorize(s, "*", colorSign)
+	s = replandcolorize(s, "&", colorSign)
+	s = replandcolorize(s, "/", colorSign)
+	s = replandcolorize(s, "%", colorSign)
+	s = replandcolorize(s, "=", colorSign)
+	s = replandcolorize(s, ":", colorSign)
+	s = replandcolorize(s, "<", colorSign)
+	s = replandcolorize(s, ">", colorSign)
+	s = replandcolorize(s, "\"", colorSign)
+	s = replandcolorize(s, "'", colorSign)
+	s = replandcolorize(s, ":=", colorSign)
+	s = replandcolorize(s, "==", colorSign)
+	s = replandcolorize(s, "<=", colorSign)
+	s = replandcolorize(s, ">=", colorSign)
+	s = replandcolorize(s, "!=", colorSign)
+	s = replandcolorize(s, "+=", colorSign)
+	s = replandcolorize(s, "-=", colorSign)
+	s = replandcolorize(s, "*=", colorSign)
+	s = replandcolorize(s, "/=", colorSign)
+	s = replandcolorize(s, "%=", colorSign)
+	s = replandcolorize(s, "&&", colorSign)
+	s = replandcolorize(s, "||", colorSign)
+
+	s = colorize2(s, _package, "package", colorKeyword)
+	s = colorize2(s, _import, "import", colorKeyword)
+	s = colorize2(s, _func, "func", colorKeyword)
+	s = colorize2(s, _defer, "defer", colorKeyword)
+	s = colorize2(s, _return, "return", colorKeyword)
+	s = colorize2(s, _for, "for", colorKeyword)
+	s = colorize2(s, _range, "range", colorKeyword)
+	s = colorize2(s, _break, "for", colorKeyword)
+	s = colorize2(s, _continue, "for", colorKeyword)
+	s = colorize2(s, _if, "if", colorKeyword)
+	s = colorize2(s, _else, "else", colorKeyword)
+	s = colorize2(s, _var, "var", colorKeyword)
+	s = colorize2(s, _const, "const", colorKeyword)
+	s = colorize2(s, _switch, "switch", colorKeyword)
+	s = colorize2(s, _case, "case", colorKeyword)
+	s = colorize2(s, _goto, "goto", colorKeyword)
+	s = colorize2(s, _fallthrough, "fallthrough", colorKeyword)
+	s = colorize2(s, _default, "default", colorKeyword)
+	s = colorize2(s, _type, "type", colorKeyword)
+	s = colorize2(s, _struct, "struct", colorKeyword)
+	s = colorize2(s, _interface, "interface", colorKeyword)
+	s = colorize2(s, _map, "map", colorKeyword)
+	s = colorize2(s, _select, "select", colorKeyword)
+	s = colorize2(s, _go, "go", colorKeyword)
+	s = colorize2(s, _chan, "chan", colorKeyword)
+	s = colorize2(s, _iota, "iota", colorKeyword)
+	s = colorize2(s, _nil, "nil", colorKeyword)
+	s = colorize2(s, _true, "true", colorKeyword)
+	s = colorize2(s, _false, "false", colorKeyword)
+
+	s = colorize2(s, _bool, "bool", colorType)
+	s = colorize2(s, _uint8, "uint8", colorType)
+	s = colorize2(s, _uint16, "uint16", colorType)
+	s = colorize2(s, _uint32, "uint32", colorType)
+	s = colorize2(s, _uint64, "uint64", colorType)
+	s = colorize2(s, _int8, "int8", colorType)
+	s = colorize2(s, _int16, "int16", colorType)
+	s = colorize2(s, _int32, "int32", colorType)
+	s = colorize2(s, _int64, "int64", colorType)
+	s = colorize2(s, _float32, "float32", colorType)
+	s = colorize2(s, _float64, "float64", colorType)
+	s = colorize2(s, _complex64, "complex64", colorType)
+	s = colorize2(s, _complex128, "complex128", colorType)
+	s = colorize2(s, _string, "string", colorType)
+	s = colorize2(s, _int, "int", colorType)
+	s = colorize2(s, _uint, "uint", colorType)
+	s = colorize2(s, _uintptr, "uintptr", colorType)
+	s = colorize2(s, _byte, "byte", colorType)
+	s = colorize2(s, _rune, "rune", colorType)
+	s = colorize2(s, _any, "any", colorType)
+	s = colorize2(s, _error, "error", colorType)
+	s = colorize2(s, _comparable, "comparable", colorType)
+
+	s = colorize2(s, _append, "append", colorBuiltinFunc)
+	s = colorize2(s, _copy, "copy", colorBuiltinFunc)
+	s = colorize2(s, _delete, "delete", colorBuiltinFunc)
+	s = colorize2(s, _len, "len", colorBuiltinFunc)
+	s = colorize2(s, _cap, "cap", colorBuiltinFunc)
+	s = colorize2(s, _make, "make", colorBuiltinFunc)
+	s = colorize2(s, _max, "max", colorBuiltinFunc)
+	s = colorize2(s, _min, "min", colorBuiltinFunc)
+	s = colorize2(s, _new, "new", colorBuiltinFunc)
+	s = colorize2(s, _complex, "complex", colorBuiltinFunc)
+	s = colorize2(s, _real, "real", colorBuiltinFunc)
+	s = colorize2(s, _imag, "imag", colorBuiltinFunc)
+	s = colorize2(s, _clear, "clear", colorBuiltinFunc)
+	s = colorize2(s, _close, "close", colorBuiltinFunc)
+	s = colorize2(s, _panic, "panic", colorBuiltinFunc)
+	s = colorize2(s, _recover, "recover", colorBuiltinFunc)
+	s = colorize2(s, _print, "print", colorBuiltinFunc)
+	s = colorize2(s, _println, "println", colorBuiltinFunc)
+
+	return s
 }
 
 /*
@@ -240,6 +486,7 @@ type file interface {
 
 type screen struct {
 	term            *screenterm
+	hl              highlighter
 	width           int
 	height          int
 	lines           []*line
@@ -286,6 +533,14 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 	}
 
 	s.updatelinenumberwidth()
+
+	filename := file.Name()
+	switch {
+	case strings.HasSuffix(filename, ".go"):
+		s.hl = golanghighlighter{}
+	default:
+		s.hl = nophighlighter{}
+	}
 
 	return s
 }
@@ -423,8 +678,8 @@ func (s *screen) render(first bool) {
 
 	displine := func(y int) string {
 		line := s.lines[y]
-		linenumber := fmt.Sprintf("%v%v", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
-		return fmt.Sprintf("%v %v", linenumber, line.cut(s.xoffset, s.width-1-(s.linenumberwidth+1)))
+		linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
+		return fmt.Sprintf("%v %v", linenumber, line.hlandcut(s.hl, s.xoffset, s.width-1-(s.linenumberwidth+1)))
 	}
 
 	/* update texts */
@@ -456,7 +711,7 @@ func (s *screen) render(first bool) {
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	fmt.Fprint(s.term, s.statusline().cut(0, s.width-(s.linenumberwidth+1)))
+	fmt.Fprint(s.term, s.statusline().hlandcut(s.hl, 0, s.width-(s.linenumberwidth+1)))
 
 	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
@@ -1304,9 +1559,9 @@ func (e *editor) render(first bool) {
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
-		fmt.Fprint(e.term, e.msg.cut(0, e.width))
+		fmt.Fprint(e.term, e.msg.hlandcut(nophighlighter{}, 0, e.width))
 	} else {
-		fmt.Fprint(e.term, e.commandline().cut(0, e.width))
+		fmt.Fprint(e.term, e.commandline().hlandcut(nophighlighter{}, 0, e.width))
 	}
 
 	if e.windowchanged {
@@ -1591,23 +1846,21 @@ func (k key) String() string {
 		return "ESC"
 	case _bs:
 		return "BackSpace"
-	case _del:
-		return "Delete"
 	case _up:
-		return "�"
+		return "up"
 	case _down:
-		return "�"
+		return "down"
 	case _right:
-		return "�"
+		return "right"
 	case _left:
-		return "�"
+		return "left"
 	case _home:
 		return "Home"
 	case _end:
 		return "End"
 	case _insert:
 		return "Insert"
-	case _delete:
+	case _del:
 		return "Delete"
 	case _pageup:
 		return "PageUp"
@@ -1678,7 +1931,6 @@ const (
 	_tab
 	_esc
 	_bs
-	_del
 
 	// arrow
 	_up
@@ -1689,7 +1941,7 @@ const (
 	_home
 	_end
 	_insert
-	_delete
+	_del
 	_pageup
 	_pagedown
 
@@ -1860,7 +2112,7 @@ func (r *reader) read() (i *input) {
 			case buf[1] == '2' && buf[2] == '~':
 				return &input{special: _insert}
 			case buf[1] == '3' && buf[2] == '~':
-				return &input{special: _delete}
+				return &input{special: _del}
 			case buf[1] == '5' && buf[2] == '~':
 				return &input{special: _pageup}
 			case buf[1] == '6' && buf[2] == '~':

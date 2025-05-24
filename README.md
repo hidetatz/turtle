@@ -1,4 +1,6 @@
-turtle editor
+turtle editor - An old-fashioned cli text editor for unix.
+
+![Image](https://github.com/user-attachments/assets/84280ddc-f619-41ec-a348-3412bbefb21e)
 
 ## usage
 
