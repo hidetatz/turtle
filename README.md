@@ -7,13 +7,13 @@ turtle editor - An old-fashioned cli text editor for unix.
 ### build
 
 ```shell
-go build -o tt main.go
+go build
 ```
 
 ### install
 
 ```shell
-go build -o tt main.go && mv ./tt $(go env GOPATH)/bin/tt
+go install
 ```
 
 ### run
@@ -41,12 +41,12 @@ For example, `3j` moves the cursor down by 3 times.
 * `j`: move down
 * `k`: move up
 * `l`: move right
-* `f <character>`: find and move to the **next** <character> on the current line
-* `F <character>`: find and move to the **previous** <character> on the current line
+* `f <character>`: find and move to the **next** \<character\> on the current line
+* `F <character>`: find and move to the **previous** \<character\> on the current line
 * `o`: insert a line **below** the current cursor, then enter insert mode
 * `O`: insert a line **above** the current cursor, then enter insert mode
 * `d`: delete a character
-* `<number> G`: move to the <number> line
+* `<number> G`: move to the \<number\> line
 * `gg`: move to the text head
 * `ge`: move to the text bottom
 * `gh`: move to the current line head
@@ -77,12 +77,6 @@ In insert mode, you can edit the text.
 * `Esc`: exit insert mode
 
 ## development
-
-### run test
-
-```shell
-go test ./...
-```
 
 ### debug
 

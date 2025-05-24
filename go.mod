@@ -1,4 +1,4 @@
-module github.com/hidetatz/turtle
+module github.com/hidetatz/turtle/tt
 
 go 1.24.2
 
