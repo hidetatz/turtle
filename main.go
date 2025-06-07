@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -47,13 +46,16 @@ func (m mode) String() string {
  * character
  */
 
+var nilch = &character{}
+
 // character represents a single character, such as "a", "1", "#", space, tab, etc.
 type character struct {
-	r     rune
-	tab   bool // true if the character represents Tab.
-	nl    bool // true if the character represents new line.
-	width int
-	str   string
+	r         rune
+	tab       bool // true if the character represents Tab.
+	nl        bool // true if the character represents new line.
+	fullwidth bool
+	width     int
+	str       string
 }
 
 func newCharacter(r rune) *character {
@@ -69,14 +71,14 @@ func newCharacter(r rune) *character {
 	}
 
 	if fullwidth(r) {
-		return &character{r: r, width: 2, str: string(r)}
+		return &character{fullwidth: true, r: r, width: 2, str: string(r)}
 	}
 
 	return &character{r: r, width: 1, str: string(r)}
 }
 
 func (c *character) copy() *character {
-	return &character{c.r, c.tab, c.nl, c.width, c.str}
+	return &character{c.r, c.tab, c.nl, c.fullwidth, c.width, c.str}
 }
 
 func (c *character) isspace() bool {
@@ -105,6 +107,10 @@ func (c *character) String() string {
 
 type line struct {
 	buffer []*character
+	// tokens             []*token
+	colors             []int
+	inmultilinecomment bool
+	inmultilinestring  bool
 }
 
 func newcommandline() *line {
@@ -112,17 +118,20 @@ func newcommandline() *line {
 }
 
 func newemptyline() *line {
-	return &line{buffer: []*character{newCharacter('\n')}}
+	return &line{buffer: []*character{newCharacter('\n')}, colors: []int{-1}}
 }
 
 func newline(s string) *line {
 	runes := []rune(s)
 	buff := make([]*character, len(runes))
+	colors := make([]int, len(runes))
 	for i := range runes {
 		buff[i] = newCharacter(runes[i])
+		colors[i] = -1
 	}
 	buff = append(buff, newCharacter('\n'))
-	return &line{buffer: buff}
+	colors = append(colors, -1)
+	return &line{buffer: buff, colors: colors}
 }
 
 func (l *line) String() string {
@@ -190,14 +199,42 @@ func (l *line) delchar(at int) {
 }
 
 func (l *line) equal(s string) bool {
-	tmp := &line{l.buffer[:l.length()-1]}
-	return s == tmp.String()
+	rs := []rune(s)
+	if len(l.buffer) != len(rs)+1 {
+		return false
+	}
+
+	for i := range rs {
+		if l.buffer[i].tab {
+			if rs[i] != '\t' {
+				return false
+			}
+		}
+
+		if l.buffer[i].r != rs[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (l *line) copy() *line {
-	copy := &line{make([]*character, len(l.buffer))}
+	copy := &line{
+		buffer: make([]*character, len(l.buffer)),
+		// tokens:             make([]*token, len(l.tokens)),
+		colors:             make([]int, len(l.colors)),
+		inmultilinecomment: l.inmultilinecomment,
+		inmultilinestring:  l.inmultilinestring,
+	}
 	for i := range l.buffer {
 		copy.buffer[i] = l.buffer[i].copy()
+	}
+	// for i := range l.tokens {
+	// 	copy.tokens[i] = l.tokens[i].copy()
+	// }
+	for i := range l.colors {
+		copy.colors[i] = l.colors[i]
 	}
 	return copy
 }
@@ -218,258 +255,563 @@ func (l *line) trimprefix(prefix string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(l.String(), prefix), " ")
 }
 
-func (l *line) hlandcut(hl highlighter, from, limit int) string {
-	s := l.String()
+func (l *line) substring(start, end int) string {
+	s := ""
+	for i := start; i < end; i++ {
+		s += l.buffer[i].str
+	}
+	return s
+}
 
-	// todo: consider containing fullwidth char case
-	length := len(s)
+func (l *line) display(from, width int) string {
+	colorize := func(s string, color int) string {
+		if color == -1 {
+			return s
+		}
+		return fmt.Sprintf("\x1b[38;5;%dm%v\x1b[0m", int(color), s)
+	}
 
-	if length < from {
+	if l.width() < from {
 		return ""
 	}
 
-	to := min(length, from+limit)
+	var str string
 
-	if lineComment.MatchString(s) || multiLineComment.MatchString(s) {
-		return hl.hlcomment(s[from:to])
+	curx := 0
+	for i := range l.length() {
+		c := l.buffer[i]
+
+		nextx := curx + c.width
+
+		if nextx < from {
+			curx = nextx
+			continue
+		}
+
+		s := c.str
+		if curx < from {
+			if c.fullwidth {
+				curx = nextx
+				continue
+			}
+
+			// it must be tab
+			s = c.str[from-curx:]
+			curx = nextx
+		}
+
+		if len(l.colors) == 0 {
+			str += s
+		} else {
+			str += colorize(s, l.colors[i])
+		}
 	}
 
-	return hl.hl(s[from:to])
+	return str
 }
 
-/* highlighter */
+/*
+ * tokenizer
+ */
 
-var (
-	/* golang */
+type tokentype int
 
-	lineComment      = regexp.MustCompile(`^(.*)//(.*)$`)
-	multiLineComment = regexp.MustCompile(`^(.*)/\*(.*)\*/(.*)$`)
-
-	_number = regexp.MustCompile(`(\d+)`)
-
-	_bool       = regexp.MustCompile(`^(.+\s)bool(.*)$`)
-	_uint8      = regexp.MustCompile(`^(.+\s)uint8(.*)$`)
-	_uint16     = regexp.MustCompile(`^(.+\s)uint16(.*)$`)
-	_uint32     = regexp.MustCompile(`^(.+\s)uint32(.*)$`)
-	_uint64     = regexp.MustCompile(`^(.+\s)uint64(.*)$`)
-	_int8       = regexp.MustCompile(`^(.+\s)int8(.*)$`)
-	_int16      = regexp.MustCompile(`^(.+\s)int16(.*)$`)
-	_int32      = regexp.MustCompile(`^(.+\s)int32(.*)$`)
-	_int64      = regexp.MustCompile(`^(.+\s)int64(.*)$`)
-	_float32    = regexp.MustCompile(`^(.+\s)float32(.*)$`)
-	_float64    = regexp.MustCompile(`^(.+\s)float64(.*)$`)
-	_complex64  = regexp.MustCompile(`^(.+\s)complex64(.*)$`)
-	_complex128 = regexp.MustCompile(`^(.+\s)complex128(.*)$`)
-	_string     = regexp.MustCompile(`^(.+\s)string(.*)$`)
-	_int        = regexp.MustCompile(`^(.+\s)int(.*)$`)
-	_uint       = regexp.MustCompile(`^(.+\s)uint(.*)$`)
-	_uintptr    = regexp.MustCompile(`^(.+\s)uintptr(.*)$`)
-	_byte       = regexp.MustCompile(`^(.+\s)byte(.*)$`)
-	_rune       = regexp.MustCompile(`^(.+\s)rune(.*)$`)
-	_any        = regexp.MustCompile(`^(.+\s)any(.*)$`)
-	_error      = regexp.MustCompile(`^(.+\s)error(.*)$`)
-	_comparable = regexp.MustCompile(`^(.+\s)comparable(.*)$`)
-	_iota       = regexp.MustCompile(`^(.+\s)iota(.*)$`)
-	_nil        = regexp.MustCompile(`^(.+\s)nil(.*)$`)
-
-	_append  = regexp.MustCompile(`^(.*\s)append(\(.*)$`)
-	_copy    = regexp.MustCompile(`^(.*\s)copy(\(.*)$`)
-	_delete  = regexp.MustCompile(`^(.*\s)delete(\(.*)$`)
-	_len     = regexp.MustCompile(`^(.*\s)len(\(.*)$`)
-	_cap     = regexp.MustCompile(`^(.*\s)cap(\(.*)$`)
-	_make    = regexp.MustCompile(`^(.*\s)make(\(.*)$`)
-	_max     = regexp.MustCompile(`^(.*\s)max(\(.*)$`)
-	_min     = regexp.MustCompile(`^(.*\s)min(\(.*)$`)
-	_new     = regexp.MustCompile(`^(.*\s)new(\(.*)$`)
-	_complex = regexp.MustCompile(`^(.*\s)complex(\(.*)$`)
-	_real    = regexp.MustCompile(`^(.*\s)real(\(.*)$`)
-	_imag    = regexp.MustCompile(`^(.*\s)imag(\(.*)$`)
-	_clear   = regexp.MustCompile(`^(.*\s)clear(\(.*)$`)
-	_close   = regexp.MustCompile(`^(.*\s)close(\(.*)$`)
-	_panic   = regexp.MustCompile(`^(.*\s)panic(\(.*)$`)
-	_recover = regexp.MustCompile(`^(.*\s)recover(\(.*)$`)
-	_print   = regexp.MustCompile(`^(.*\s)print(\(.*)$`)
-	_println = regexp.MustCompile(`^(.*\s)println(\(.*)$`)
-
-	_package     = regexp.MustCompile(`^(\s?)package(\s.*)$`)
-	_import      = regexp.MustCompile(`^(\s?)import(\s.*)$`)
-	_func        = regexp.MustCompile(`^(.*\s?)func(\s.*)$`)
-	_defer       = regexp.MustCompile(`^(\s+)defer(\s.*)$`)
-	_return      = regexp.MustCompile(`^(\s+)return(\s.*)$`)
-	_for         = regexp.MustCompile(`^(\s+)for(\s.*)$`)
-	_range       = regexp.MustCompile(`^(.+\s)range(\s.*)$`)
-	_break       = regexp.MustCompile(`^(\s+)break(;?)$`)
-	_continue    = regexp.MustCompile(`^(\s+)continue(;?)$`)
-	_if          = regexp.MustCompile(`^(\s+)if(\s.*)$`)
-	_else        = regexp.MustCompile(`^(.*\s)else(\s.*)$`)
-	_var         = regexp.MustCompile(`^(\s*)var(\s.*)$`)
-	_const       = regexp.MustCompile(`^(\s*)const(\s.*)$`)
-	_switch      = regexp.MustCompile(`^(\s+)switch(\s.*)$`)
-	_case        = regexp.MustCompile(`^(\s+)case(\s.*)$`)
-	_goto        = regexp.MustCompile(`^(\s+)goto(\s.*)$`)
-	_fallthrough = regexp.MustCompile(`^(\s+)fallthrough(;?)$`)
-	_default     = regexp.MustCompile(`^(\s+)default(.*)$`)
-	_type        = regexp.MustCompile(`^(.*\s)type(\s.*)$`)
-	_struct      = regexp.MustCompile(`^(.+\s)struct(\s.*)$`)
-	_interface   = regexp.MustCompile(`^(.+\s)interface(\s.*)$`)
-	// _map         = regexp.MustCompile(`^(.+)map(.*)$`)
-	_select = regexp.MustCompile(`^(\s+)select(\s.*)$`)
-	_go     = regexp.MustCompile(`^(\s+)go(\s.*)$`)
-	_chan   = regexp.MustCompile(`^(.+\s)chan(\s.*)$`)
-	_true   = regexp.MustCompile(`^(.+\s)true(.*)$`)
-	_false  = regexp.MustCompile(`^(.+\s)false(.*)$`)
+const (
+	tk_unknown tokentype = iota
+	tk_ident
+	tk_keyword
+	tk_string
+	tk_multilinestring
+	tk_number
+	tk_operator
+	tk_symbol
+	tk_linecomment
+	tk_blockcomment
+	tk_whitespace
+	tk_eol
 )
 
+func (t tokentype) String() string {
+	switch t {
+	case tk_unknown:
+		return "unknown"
+	case tk_ident:
+		return "ident"
+	case tk_keyword:
+		return "keyword"
+	case tk_string:
+		return "string"
+	case tk_multilinestring:
+		return "multilinestring"
+	case tk_number:
+		return "number"
+	case tk_operator:
+		return "operator"
+	case tk_symbol:
+		return "symbol"
+	case tk_linecomment:
+		return "linecomment"
+	case tk_blockcomment:
+		return "blockcomment"
+	case tk_whitespace:
+		return "whitespace"
+	case tk_eol:
+		return "eol"
+	default:
+		panic("unknown tokentype")
+	}
+}
+
+type token struct {
+	typ        tokentype
+	chars      []*character
+	start, end int
+}
+
+func (t *token) copy() *token {
+	cp := &token{
+		typ:   t.typ,
+		chars: make([]*character, len(t.chars)),
+		start: t.start,
+		end:   t.end,
+	}
+
+	for i := range t.chars {
+		cp.chars[i] = t.chars[i].copy()
+	}
+
+	return cp
+}
+
+func (t *token) String() string {
+	return fmt.Sprintf("token{typ: %v, start: %v, end: %v}", t.typ, t.start, t.end)
+}
+
+type tokenizer interface {
+	tokenizeline(l *line) []*token
+}
+
+func newnoptokenizer() *clikelangtokenizer {
+	return &clikelangtokenizer{}
+}
+
+func newgolangtokenizer() *clikelangtokenizer {
+	return &clikelangtokenizer{
+		linecommentstart:      []rune{'/', '/'},
+		blockcommentstart:     []rune{'/', '*'},
+		blockcommentend:       []rune{'*', '/'},
+		stringstarts:          [][]rune{{'"'}, {'\''}},
+		stringends:            [][]rune{{'"'}, {'\''}},
+		multilinestringstarts: [][]rune{{'`'}},
+		multilinestringends:   [][]rune{{'`'}},
+		keywords: []string{
+			"append", "copy", "delete", "len", "cap", "make", "max", "min", "new", "complex", "real", "imag", "clear", "close", "panic", "recover", "print", "println",
+			"package", "import", "func", "defer", "return", "for", "range", "for", "if", "else", "var", "const", "switch", "case", "goto", "fallthrough", "default",
+			"type", "struct", "interface", "map", "select", "go", "chan", "iota", "nil", "true", "false",
+			"bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "complex64", "complex128",
+			"string", "int", "uint", "uintptr", "byte", "rune", "any", "error", "comparable",
+		},
+		symbols:    []string{"[", "]", "(", ")", "{", "}", ":", ";", ",", "."},
+		operators:  []string{"!", "+", "-", "*", "/", "%", "&", "|", "=", "<", ">", "~"},
+		operators2: []string{"++", "--", ":=", "==", "<=", ">=", "!=", "+=", "-=", "*=", "/=", "|=", "&=", "%=", "&&", "||", "<<", ">>"},
+		operators3: []string{">>=", "<<=", "&^="},
+	}
+}
+
+type clikelangtokenizer struct {
+	line *line
+	pos  int
+
+	// language setting
+
+	linecommentstart  []rune
+	blockcommentstart []rune
+	blockcommentend   []rune
+
+	stringstarts          [][]rune
+	stringends            [][]rune
+	rawstringstarts       [][]rune
+	rawstringends         [][]rune
+	multilinestringstarts [][]rune
+	multilinestringends   [][]rune
+
+	keywords   []string
+	symbols    []string
+	operators  []string // single character
+	operators2 []string // 2 characters
+	operators3 []string // 3 characters
+}
+
+func (t *clikelangtokenizer) tokenizeline(l *line) []*token {
+	t.line = l
+	t.pos = 0
+
+	var tokens []*token
+	inmultilinecomment := false
+	inmultilinestring := false
+	multilinestringstart := []rune{}
+	multilinestringend := []rune{}
+	for t.pos < t.line.length() {
+		var tk *token
+		tk, inmultilinecomment, inmultilinestring, multilinestringstart, multilinestringend = t.nexttoken(inmultilinecomment, inmultilinestring, multilinestringstart, multilinestringend)
+		if tk.typ == tk_eol {
+			break
+		}
+		tokens = append(tokens, tk)
+	}
+
+	return tokens
+}
+
+func (t *clikelangtokenizer) nexttoken(inmultilinecomment, inmultilinestring bool, multilinestringstart, multilinestringend []rune) (*token, bool, bool, []rune, []rune) {
+	if t.pos == t.line.length()-1 {
+		return &token{typ: tk_eol, start: t.pos, end: t.pos}, false, false, nil, nil
+	}
+
+	start := t.pos
+	c := t.line.buffer[start]
+
+	if inmultilinecomment {
+		tk, terminated := t.readblockcomment(start)
+		return tk, !terminated, false, nil, nil
+	}
+
+	if inmultilinestring {
+		tk, terminated := t.readmultilinestring(start, multilinestringstart, multilinestringend)
+		return tk, false, !terminated, multilinestringstart, multilinestringend
+	}
+
+	if c.tab || unicode.IsSpace(c.r) {
+		return t.readwhitespace(start), false, false, nil, nil
+	}
+
+	// comment
+	switch len(t.linecommentstart) {
+	case 1:
+		if c.r == t.linecommentstart[0] {
+			return t.readlinecomment(start), false, false, nil, nil
+		}
+	case 2:
+		if c.r == t.linecommentstart[0] && t.peek().r == t.linecommentstart[1] {
+			return t.readlinecomment(start), false, false, nil, nil
+		}
+	}
+
+	switch len(t.blockcommentstart) {
+	case 2:
+		if c.r == t.blockcommentstart[0] && t.peek().r == t.blockcommentstart[1] {
+			tk, terminated := t.readblockcomment(start)
+			return tk, !terminated, false, nil, nil
+		}
+	}
+
+	for i, stringstart := range t.stringstarts {
+		switch len(stringstart) {
+		case 1:
+			if c.r == stringstart[0] {
+				return t.readstring(start, stringstart, t.stringends[i], true), false, false, nil, nil
+			}
+		case 2:
+			if c.r == stringstart[0] && t.peek().r == stringstart[1] {
+				return t.readstring(start, stringstart, t.stringends[i], true), false, false, nil, nil
+			}
+		case 3:
+			if c.r == stringstart[0] && t.peek().r == stringstart[1] && t.peek2().r == stringstart[2] {
+				return t.readstring(start, stringstart, t.stringends[i], true), false, false, nil, nil
+			}
+		}
+	}
+
+	for i, rawstringstart := range t.rawstringstarts {
+		switch len(rawstringstart) {
+		case 1:
+			if c.r == rawstringstart[0] {
+				return t.readstring(start, rawstringstart, t.rawstringends[i], false), false, false, nil, nil
+			}
+		case 2:
+			if c.r == rawstringstart[0] && t.peek().r == rawstringstart[1] {
+				return t.readstring(start, rawstringstart, t.rawstringends[i], false), false, false, nil, nil
+			}
+		case 3:
+			if c.r == rawstringstart[0] && t.peek().r == rawstringstart[1] && t.peek2().r == rawstringstart[2] {
+				return t.readstring(start, rawstringstart, t.rawstringends[i], false), false, false, nil, nil
+			}
+		}
+	}
+
+	for i, multilinestringstart := range t.multilinestringstarts {
+		switch len(multilinestringstart) {
+		case 1:
+			if c.r == multilinestringstart[0] {
+				tk, terminated := t.readmultilinestring(start, multilinestringstart, t.multilinestringends[i])
+				return tk, false, !terminated, multilinestringstart, t.multilinestringends[i]
+			}
+		case 2:
+			if c.r == multilinestringstart[0] && t.peek().r == multilinestringstart[1] {
+				tk, terminated := t.readmultilinestring(start, multilinestringstart, t.multilinestringends[i])
+				return tk, false, !terminated, multilinestringstart, t.multilinestringends[i]
+			}
+		case 3:
+			if c.r == multilinestringstart[0] && t.peek().r == multilinestringstart[1] && t.peek2().r == multilinestringstart[2] {
+				tk, terminated := t.readmultilinestring(start, multilinestringstart, t.multilinestringends[i])
+				return tk, false, !terminated, multilinestringstart, t.multilinestringends[i]
+			}
+		}
+	}
+
+	if unicode.IsDigit(c.r) || (c.r == '.' && unicode.IsDigit(t.peek().r)) {
+		return t.readnumber(start), false, false, nil, nil
+	}
+
+	if unicode.IsLetter(c.r) || c.r == '_' {
+		return t.readident(start), false, false, nil, nil
+	}
+
+	return t.readsymbol(start), false, false, nil, nil
+}
+
+func (t *clikelangtokenizer) peek() *character {
+	if t.line.length() <= t.pos+1 {
+		return nilch
+	}
+	return t.line.buffer[t.pos+1]
+}
+
+func (t *clikelangtokenizer) peek2() *character {
+	if t.line.length() <= t.pos+2 {
+		return nilch
+	}
+	return t.line.buffer[t.pos+2]
+}
+
+func (t *clikelangtokenizer) readwhitespace(start int) *token {
+	for t.pos < t.line.length() && (unicode.IsSpace(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].tab) {
+		t.pos++
+	}
+	return &token{typ: tk_whitespace, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+}
+
+func (t *clikelangtokenizer) readlinecomment(start int) *token {
+	t.pos += len(t.linecommentstart)
+
+	for t.pos < t.line.length() {
+		t.pos++
+	}
+
+	return &token{typ: tk_linecomment, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+}
+
+func (t *clikelangtokenizer) readblockcomment(start int) (*token, bool) {
+	t.pos += len(t.blockcommentstart)
+
+	terminated := false
+	for t.pos < t.line.length() {
+		if t.line.length()-1 < t.pos+len(t.blockcommentend) {
+			t.pos++
+			continue
+		}
+
+		found := true
+		for i, commentchar := range t.blockcommentend {
+			if t.line.buffer[t.pos+i].r != commentchar {
+				found = false
+				break
+			}
+		}
+
+		if found {
+			t.pos += len(t.blockcommentend)
+			terminated = true
+			break
+		}
+
+		t.pos++
+	}
+
+	return &token{typ: tk_blockcomment, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}, terminated
+}
+
+func (t *clikelangtokenizer) readstring(start int, startquote, endquote []rune, considerescape bool) *token {
+	t.pos += len(startquote)
+
+	for t.pos < t.line.length() {
+		if t.line.length()-1 < t.pos+len(endquote) {
+			t.pos++
+			continue
+		}
+
+		found := true
+		for i, quotechar := range endquote {
+			if t.line.buffer[t.pos+i].r != quotechar {
+				found = false
+				break
+			}
+		}
+		if found {
+			t.pos += len(endquote)
+			break
+		}
+
+		if considerescape {
+			if t.line.buffer[t.pos].r == '\\' && t.pos+1 < t.line.length() {
+				t.pos += 2
+			} else {
+				t.pos++
+			}
+		} else {
+			t.pos++
+		}
+	}
+
+	return &token{typ: tk_string, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+}
+
+func (t *clikelangtokenizer) readmultilinestring(start int, startquote, endquote []rune) (*token, bool) {
+	t.pos += len(startquote)
+
+	terminated := false
+	for t.pos < t.line.length() {
+		if t.line.length()-1 < t.pos+len(endquote) {
+			t.pos++
+			continue
+		}
+
+		found := true
+		for i, quotechar := range endquote {
+			if t.line.buffer[t.pos+i].r != quotechar {
+				found = false
+				break
+			}
+		}
+
+		if found {
+			t.pos += len(endquote)
+			terminated = true
+			break
+		}
+
+		t.pos++
+	}
+
+	return &token{typ: tk_multilinestring, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}, terminated
+}
+
+func (t *clikelangtokenizer) readnumber(start int) *token {
+	for t.pos < t.line.length() && (unicode.IsDigit(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].r == '_') {
+		t.pos++
+	}
+
+	if t.pos < t.line.length() && t.line.buffer[t.pos].r == '.' {
+		t.pos++
+		for t.pos < t.line.length() && (unicode.IsDigit(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].r == '_') {
+			t.pos++
+		}
+	}
+
+	if t.pos < t.line.length() && (t.line.buffer[t.pos].r == 'e' || t.line.buffer[t.pos].r == 'E') {
+		t.pos++
+		if t.pos < t.line.length() && (t.line.buffer[t.pos].r == '+' || t.line.buffer[t.pos].r == '-') {
+			t.pos++
+		}
+		for t.pos < t.line.length() && (unicode.IsDigit(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].r == '_') {
+			t.pos++
+		}
+	}
+
+	return &token{typ: tk_number, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+}
+
+func (t *clikelangtokenizer) readident(start int) *token {
+	for t.pos < t.line.length() && (unicode.IsLetter(t.line.buffer[t.pos].r) || unicode.IsDigit(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].r == '_') {
+		t.pos++
+	}
+
+	typ := tk_ident
+
+	s := t.line.substring(start, t.pos)
+	if slices.Contains(t.keywords, s) {
+		typ = tk_keyword
+	}
+
+	return &token{typ: typ, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+}
+
+func (t *clikelangtokenizer) readsymbol(start int) *token {
+	if t.pos+3 < t.line.length() {
+		threechars := t.line.substring(t.pos, t.pos+3)
+		if slices.Contains(t.operators3, threechars) {
+			t.pos += 3
+			return &token{typ: tk_operator, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+		}
+	}
+
+	if t.pos+2 < t.line.length() {
+		twochars := t.line.substring(t.pos, t.pos+2)
+		if slices.Contains(t.operators2, twochars) {
+			t.pos += 2
+			return &token{typ: tk_operator, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+		}
+	}
+
+	t.pos++
+
+	char := string(t.line.buffer[t.pos].r)
+	if slices.Contains(t.operators, char) {
+		return &token{typ: tk_operator, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	}
+
+	if slices.Contains(t.symbols, char) {
+		return &token{typ: tk_symbol, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	}
+
+	return &token{typ: tk_unknown, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+}
+
+/*
+ * highlighter
+ * color command:
+ * for i in {0..256} ; do printf "\e[38;5;${i}m%3d \e[0m" $i ; [ $((i % 16)) -eq 0 ] && echo ; done
+ */
+
 type highlighter interface {
-	hl(s string) string
-	hlcomment(s string) string
-}
-
-func colorize(s string, color int) string {
-	return fmt.Sprintf("\x1b[38;5;%dm%v\x1b[0m", color, s)
-}
-
-// do colorize with 2 surround capture groups
-func colorize2(s string, r *regexp.Regexp, repl string, color int) string {
-	return r.ReplaceAllString(s, fmt.Sprintf("${1}\x1b[38;5;%dm%v\x1b[0m${2}", color, repl))
-}
-
-func replandcolorize(s, repl string, color int) string {
-	return strings.ReplaceAll(s, repl, colorize(repl, color))
+	highlight(l *line, tokens []*token)
 }
 
 type nophighlighter struct{}
 
-func (h nophighlighter) hlcomment(s string) string { return s }
-func (h nophighlighter) hl(s string) string        { return s }
+func (h nophighlighter) highlight(l *line, tokens []*token) {
+	for i := range l.buffer {
+		l.colors[i] = -1
+	}
+}
 
 /* golang highlighter */
 
-type golanghighlighter struct{}
+type clikelangbasichighlighter struct{}
 
-func (h golanghighlighter) hlcomment(s string) string {
-	commentcolor := 247
-	s = lineComment.ReplaceAllString(s, fmt.Sprintf("${1}\x1b[38;5;%dm//${2}\x1b[0m", commentcolor))
-	s = multiLineComment.ReplaceAllString(s, fmt.Sprintf("${1}\x1b[38;5;%dm/*${2}*/\x1b[0m${3}", commentcolor))
-	return s
-}
-
-func (h golanghighlighter) hl(s string) string {
-	var (
-		colorParen       = 67
-		colorSign        = 38
-		colorKeyword     = 74
-		colorType        = 81
-		colorBuiltinFunc = 117
-	)
-	// colors code:
-	// for i in {0..256} ; do printf "\e[38;5;${i}m%3d \e[0m" $i ; [ $((i % 16)) -eq 0 ] && echo ; done
-
-	s = replandcolorize(s, "[", colorParen) // must be at the top to prevent replacing escape seq
-	s = replandcolorize(s, "]", colorParen)
-	s = replandcolorize(s, "(", colorParen)
-	s = replandcolorize(s, ")", colorParen)
-	s = replandcolorize(s, "{", colorParen)
-	s = replandcolorize(s, "}", colorParen)
-
-	s = replandcolorize(s, "+", colorSign)
-	s = replandcolorize(s, "-", colorSign)
-	s = replandcolorize(s, "*", colorSign)
-	s = replandcolorize(s, "&", colorSign)
-	s = replandcolorize(s, "/", colorSign)
-	s = replandcolorize(s, "%", colorSign)
-	s = replandcolorize(s, "=", colorSign)
-	s = replandcolorize(s, ":", colorSign)
-	s = replandcolorize(s, "<", colorSign)
-	s = replandcolorize(s, ">", colorSign)
-	s = replandcolorize(s, "\"", colorSign)
-	s = replandcolorize(s, "'", colorSign)
-	s = replandcolorize(s, ":=", colorSign)
-	s = replandcolorize(s, "==", colorSign)
-	s = replandcolorize(s, "<=", colorSign)
-	s = replandcolorize(s, ">=", colorSign)
-	s = replandcolorize(s, "!=", colorSign)
-	s = replandcolorize(s, "+=", colorSign)
-	s = replandcolorize(s, "-=", colorSign)
-	s = replandcolorize(s, "*=", colorSign)
-	s = replandcolorize(s, "/=", colorSign)
-	s = replandcolorize(s, "%=", colorSign)
-	s = replandcolorize(s, "&&", colorSign)
-	s = replandcolorize(s, "||", colorSign)
-
-	s = colorize2(s, _append, "append", colorBuiltinFunc)
-	s = colorize2(s, _copy, "copy", colorBuiltinFunc)
-	s = colorize2(s, _delete, "delete", colorBuiltinFunc)
-	s = colorize2(s, _len, "len", colorBuiltinFunc)
-	s = colorize2(s, _cap, "cap", colorBuiltinFunc)
-	s = colorize2(s, _make, "make", colorBuiltinFunc)
-	s = colorize2(s, _max, "max", colorBuiltinFunc)
-	s = colorize2(s, _min, "min", colorBuiltinFunc)
-	s = colorize2(s, _new, "new", colorBuiltinFunc)
-	s = colorize2(s, _complex, "complex", colorBuiltinFunc)
-	s = colorize2(s, _real, "real", colorBuiltinFunc)
-	s = colorize2(s, _imag, "imag", colorBuiltinFunc)
-	s = colorize2(s, _clear, "clear", colorBuiltinFunc)
-	s = colorize2(s, _close, "close", colorBuiltinFunc)
-	s = colorize2(s, _panic, "panic", colorBuiltinFunc)
-	s = colorize2(s, _recover, "recover", colorBuiltinFunc)
-	s = colorize2(s, _print, "print", colorBuiltinFunc)
-	s = colorize2(s, _println, "println", colorBuiltinFunc)
-
-	s = colorize2(s, _package, "package", colorKeyword)
-	s = colorize2(s, _import, "import", colorKeyword)
-	s = colorize2(s, _func, "func", colorKeyword)
-	s = colorize2(s, _defer, "defer", colorKeyword)
-	s = colorize2(s, _return, "return", colorKeyword)
-	s = colorize2(s, _for, "for", colorKeyword)
-	s = colorize2(s, _range, "range", colorKeyword)
-	s = colorize2(s, _break, "for", colorKeyword)
-	s = colorize2(s, _continue, "for", colorKeyword)
-	s = colorize2(s, _if, "if", colorKeyword)
-	s = colorize2(s, _else, "else", colorKeyword)
-	s = colorize2(s, _var, "var", colorKeyword)
-	s = colorize2(s, _const, "const", colorKeyword)
-	s = colorize2(s, _switch, "switch", colorKeyword)
-	s = colorize2(s, _case, "case", colorKeyword)
-	s = colorize2(s, _goto, "goto", colorKeyword)
-	s = colorize2(s, _fallthrough, "fallthrough", colorKeyword)
-	s = colorize2(s, _default, "default", colorKeyword)
-	s = colorize2(s, _type, "type", colorKeyword)
-	s = colorize2(s, _struct, "struct", colorKeyword)
-	s = colorize2(s, _interface, "interface", colorKeyword)
-	// s = colorize2(s, _map, "map", colorKeyword)
-	s = colorize2(s, _select, "select", colorKeyword)
-	s = colorize2(s, _go, "go", colorKeyword)
-	s = colorize2(s, _chan, "chan", colorKeyword)
-	s = colorize2(s, _iota, "iota", colorKeyword)
-	s = colorize2(s, _nil, "nil", colorKeyword)
-	s = colorize2(s, _true, "true", colorKeyword)
-	s = colorize2(s, _false, "false", colorKeyword)
-
-	s = colorize2(s, _bool, "bool", colorType)
-	s = colorize2(s, _uint8, "uint8", colorType)
-	s = colorize2(s, _uint16, "uint16", colorType)
-	s = colorize2(s, _uint32, "uint32", colorType)
-	s = colorize2(s, _uint64, "uint64", colorType)
-	s = colorize2(s, _int8, "int8", colorType)
-	s = colorize2(s, _int16, "int16", colorType)
-	s = colorize2(s, _int32, "int32", colorType)
-	s = colorize2(s, _int64, "int64", colorType)
-	s = colorize2(s, _float32, "float32", colorType)
-	s = colorize2(s, _float64, "float64", colorType)
-	s = colorize2(s, _complex64, "complex64", colorType)
-	s = colorize2(s, _complex128, "complex128", colorType)
-	s = colorize2(s, _string, "string", colorType)
-	s = colorize2(s, _int, "int", colorType)
-	s = colorize2(s, _uint, "uint", colorType)
-	s = colorize2(s, _uintptr, "uintptr", colorType)
-	s = colorize2(s, _byte, "byte", colorType)
-	s = colorize2(s, _rune, "rune", colorType)
-	s = colorize2(s, _any, "any", colorType)
-	s = colorize2(s, _error, "error", colorType)
-	s = colorize2(s, _comparable, "comparable", colorType)
-
-	return s
+func (h clikelangbasichighlighter) highlight(l *line, tokens []*token) {
+	for _, token := range tokens {
+		for i := token.start; i < token.end; i++ {
+			switch token.typ {
+			case tk_unknown, tk_whitespace, tk_eol:
+				l.colors[i] = -1
+			case tk_ident:
+				l.colors[i] = 106
+			case tk_keyword:
+				l.colors[i] = 66
+			case tk_string, tk_multilinestring:
+				l.colors[i] = 148
+			case tk_number:
+				l.colors[i] = 46
+			case tk_operator:
+				l.colors[i] = 34
+			case tk_symbol:
+				l.colors[i] = 10
+			case tk_linecomment, tk_blockcomment:
+				l.colors[i] = 248
+			}
+		}
+	}
 }
 
 /*
@@ -484,8 +826,9 @@ type file interface {
 }
 
 type screen struct {
-	term            *screenterm
-	hl              highlighter
+	term *screenterm
+	// tokenizer       tokenizer
+	// highlighter     highlighter
 	width           int
 	height          int
 	lines           []*line
@@ -535,15 +878,33 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 
 	s.updatelinenumberwidth()
 
-	filename := file.Name()
-	switch {
-	case strings.HasSuffix(filename, ".go"):
-		s.hl = golanghighlighter{}
-	default:
-		s.hl = nophighlighter{}
+	for i := range s.lines {
+		s.highlightline(s.lines[i])
 	}
 
 	return s
+}
+
+func (s *screen) highlightline(l *line) {
+	var t tokenizer
+	var h highlighter
+
+	switch {
+	case strings.HasSuffix(s.file.Name(), ".go_"):
+		t = newgolangtokenizer()
+		h = clikelangbasichighlighter{}
+
+	default:
+		t = newnoptokenizer()
+		h = nophighlighter{}
+	}
+
+	tokens := t.tokenizeline(l)
+	tokenstrs := make([]string, len(tokens))
+	for i := range tokens {
+		tokenstrs[i] = tokens[i].String()
+	}
+	h.highlight(l, tokens)
 }
 
 func (s *screen) updatelinenumberwidth() {
@@ -680,7 +1041,7 @@ func (s *screen) render(first bool) {
 	displine := func(y int) string {
 		line := s.lines[y]
 		linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
-		return fmt.Sprintf("%v %v", linenumber, line.hlandcut(s.hl, s.xoffset, s.width-1-(s.linenumberwidth+1)))
+		return fmt.Sprintf("%v %v", linenumber, line.display(s.xoffset, s.width-1-(s.linenumberwidth+1)))
 	}
 
 	/* update texts */
@@ -712,7 +1073,7 @@ func (s *screen) render(first bool) {
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	fmt.Fprint(s.term, s.statusline().hlandcut(s.hl, 0, s.width-(s.linenumberwidth+1)))
+	fmt.Fprint(s.term, s.statusline().display(0, s.width-(s.linenumberwidth+1)))
 
 	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
@@ -1595,9 +1956,9 @@ func (e *editor) render(first bool) {
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
-		fmt.Fprint(e.term, e.msg.hlandcut(nophighlighter{}, 0, e.width))
+		fmt.Fprint(e.term, e.msg.display(0, e.width))
 	} else {
-		fmt.Fprint(e.term, e.commandline().hlandcut(nophighlighter{}, 0, e.width))
+		fmt.Fprint(e.term, e.commandline().display(0, e.width))
 	}
 
 	if e.windowchanged {
