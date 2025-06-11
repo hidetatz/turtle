@@ -328,7 +328,6 @@ const (
 	tk_linecomment
 	tk_blockcomment
 	tk_whitespace
-	tk_eol
 )
 
 func (t tokentype) String() string {
@@ -355,8 +354,6 @@ func (t tokentype) String() string {
 		return "blockcomment"
 	case tk_whitespace:
 		return "whitespace"
-	case tk_eol:
-		return "eol"
 	default:
 		panic("unknown tokentype")
 	}
@@ -364,39 +361,39 @@ func (t tokentype) String() string {
 
 type token struct {
 	typ        tokentype
-	chars      []*character
 	start, end int
-}
 
-func (t *token) copy() *token {
-	cp := &token{
-		typ:   t.typ,
-		chars: make([]*character, len(t.chars)),
-		start: t.start,
-		end:   t.end,
-	}
+	multilinecommentterminated bool
 
-	for i := range t.chars {
-		cp.chars[i] = t.chars[i].copy()
-	}
-
-	return cp
+	multilinestringterminated bool
+	multilinestringstart      []rune
+	multilinestringend        []rune
 }
 
 func (t *token) String() string {
-	return fmt.Sprintf("token{typ: %v, start: %v, end: %v}", t.typ, t.start, t.end)
+	return fmt.Sprintf("token{typ: %v, start: %v, end: %v, commentterminated: %v, strterminated: %v}", t.typ, t.start, t.end, t.multilinecommentterminated, t.multilinestringterminated)
 }
 
-type tokenizer interface {
-	tokenizeline(l *line) []*token
+type linetokenizer interface {
+	tokenizeline(l *line, inmultilinecomment, inmultilinestring bool, multilinestrstart, multilinestrend []rune) ([]*token, bool, bool, []rune, []rune)
 }
 
-func newnoptokenizer() *clikelangtokenizer {
-	return &clikelangtokenizer{}
+type noplinetokenizer struct{}
+
+func newnoptokenizer() *noplinetokenizer {
+	return &noplinetokenizer{}
 }
 
-func newgolangtokenizer() *clikelangtokenizer {
-	return &clikelangtokenizer{
+func (t *noplinetokenizer) tokenizeline(l *line, inmultilinecomment, inmultilinestring bool, multilinestrstart, multilinestrend []rune) ([]*token, bool, bool, []rune, []rune) {
+	if l.length() == 1 {
+		return []*token{}, false, false, nil, nil
+	}
+
+	return []*token{{typ: tk_unknown, start: 0, end: l.length() - 1}}, false, false, nil, nil
+}
+
+func newgolangtokenizer() *clikelanglinetokenizer {
+	return &clikelanglinetokenizer{
 		linecommentstart:      []rune{'/', '/'},
 		blockcommentstart:     []rune{'/', '*'},
 		blockcommentend:       []rune{'*', '/'},
@@ -418,7 +415,7 @@ func newgolangtokenizer() *clikelangtokenizer {
 	}
 }
 
-type clikelangtokenizer struct {
+type clikelanglinetokenizer struct {
 	line *line
 	pos  int
 
@@ -442,66 +439,67 @@ type clikelangtokenizer struct {
 	operators3 []string // 3 characters
 }
 
-func (t *clikelangtokenizer) tokenizeline(l *line) []*token {
+func (t *clikelanglinetokenizer) tokenizeline(l *line, inmultilinecomment, inmultilinestring bool, multilinestrstart, multilinestrend []rune) ([]*token, bool, bool, []rune, []rune) {
 	t.line = l
 	t.pos = 0
 
 	var tokens []*token
-	inmultilinecomment := false
-	inmultilinestring := false
-	multilinestringstart := []rune{}
-	multilinestringend := []rune{}
-	for t.pos < t.line.length() {
+	for t.pos < t.line.length()-1 {
 		var tk *token
-		tk, inmultilinecomment, inmultilinestring, multilinestringstart, multilinestringend = t.nexttoken(inmultilinecomment, inmultilinestring, multilinestringstart, multilinestringend)
-		if tk.typ == tk_eol {
-			break
+
+		switch {
+		case inmultilinecomment:
+			tk = t.readblockcomment(0, false)
+			inmultilinecomment = !tk.multilinecommentterminated
+		case inmultilinestring:
+			tk = t.readmultilinestring(0, false, multilinestrstart, multilinestrend)
+			inmultilinestring = !tk.multilinestringterminated
+		default:
+			tk = t.nexttoken()
 		}
+
 		tokens = append(tokens, tk)
 	}
 
-	return tokens
-}
-
-func (t *clikelangtokenizer) nexttoken(inmultilinecomment, inmultilinestring bool, multilinestringstart, multilinestringend []rune) (*token, bool, bool, []rune, []rune) {
-	if t.pos == t.line.length()-1 {
-		return &token{typ: tk_eol, start: t.pos, end: t.pos}, false, false, nil, nil
+	if len(tokens) == 0 {
+		return tokens, false, false, nil, nil
 	}
 
+	lasttoken := tokens[len(tokens)-1] // except eol
+	switch lasttoken.typ {
+	case tk_blockcomment:
+		return tokens, !lasttoken.multilinecommentterminated, false, nil, nil
+	case tk_multilinestring:
+		return tokens, false, !lasttoken.multilinestringterminated, lasttoken.multilinestringstart, lasttoken.multilinestringend
+	default:
+		return tokens, false, false, nil, nil
+	}
+}
+
+func (t *clikelanglinetokenizer) nexttoken() *token {
 	start := t.pos
 	c := t.line.buffer[start]
 
-	if inmultilinecomment {
-		tk, terminated := t.readblockcomment(start)
-		return tk, !terminated, false, nil, nil
-	}
-
-	if inmultilinestring {
-		tk, terminated := t.readmultilinestring(start, multilinestringstart, multilinestringend)
-		return tk, false, !terminated, multilinestringstart, multilinestringend
-	}
-
 	if c.tab || unicode.IsSpace(c.r) {
-		return t.readwhitespace(start), false, false, nil, nil
+		return t.readwhitespace(start)
 	}
 
 	// comment
 	switch len(t.linecommentstart) {
 	case 1:
 		if c.r == t.linecommentstart[0] {
-			return t.readlinecomment(start), false, false, nil, nil
+			return t.readlinecomment(start)
 		}
 	case 2:
 		if c.r == t.linecommentstart[0] && t.peek().r == t.linecommentstart[1] {
-			return t.readlinecomment(start), false, false, nil, nil
+			return t.readlinecomment(start)
 		}
 	}
 
 	switch len(t.blockcommentstart) {
 	case 2:
 		if c.r == t.blockcommentstart[0] && t.peek().r == t.blockcommentstart[1] {
-			tk, terminated := t.readblockcomment(start)
-			return tk, !terminated, false, nil, nil
+			return t.readblockcomment(start, true)
 		}
 	}
 
@@ -509,15 +507,15 @@ func (t *clikelangtokenizer) nexttoken(inmultilinecomment, inmultilinestring boo
 		switch len(stringstart) {
 		case 1:
 			if c.r == stringstart[0] {
-				return t.readstring(start, stringstart, t.stringends[i], true), false, false, nil, nil
+				return t.readstring(start, stringstart, t.stringends[i], true)
 			}
 		case 2:
 			if c.r == stringstart[0] && t.peek().r == stringstart[1] {
-				return t.readstring(start, stringstart, t.stringends[i], true), false, false, nil, nil
+				return t.readstring(start, stringstart, t.stringends[i], true)
 			}
 		case 3:
 			if c.r == stringstart[0] && t.peek().r == stringstart[1] && t.peek2().r == stringstart[2] {
-				return t.readstring(start, stringstart, t.stringends[i], true), false, false, nil, nil
+				return t.readstring(start, stringstart, t.stringends[i], true)
 			}
 		}
 	}
@@ -526,15 +524,15 @@ func (t *clikelangtokenizer) nexttoken(inmultilinecomment, inmultilinestring boo
 		switch len(rawstringstart) {
 		case 1:
 			if c.r == rawstringstart[0] {
-				return t.readstring(start, rawstringstart, t.rawstringends[i], false), false, false, nil, nil
+				return t.readstring(start, rawstringstart, t.rawstringends[i], false)
 			}
 		case 2:
 			if c.r == rawstringstart[0] && t.peek().r == rawstringstart[1] {
-				return t.readstring(start, rawstringstart, t.rawstringends[i], false), false, false, nil, nil
+				return t.readstring(start, rawstringstart, t.rawstringends[i], false)
 			}
 		case 3:
 			if c.r == rawstringstart[0] && t.peek().r == rawstringstart[1] && t.peek2().r == rawstringstart[2] {
-				return t.readstring(start, rawstringstart, t.rawstringends[i], false), false, false, nil, nil
+				return t.readstring(start, rawstringstart, t.rawstringends[i], false)
 			}
 		}
 	}
@@ -543,69 +541,68 @@ func (t *clikelangtokenizer) nexttoken(inmultilinecomment, inmultilinestring boo
 		switch len(multilinestringstart) {
 		case 1:
 			if c.r == multilinestringstart[0] {
-				tk, terminated := t.readmultilinestring(start, multilinestringstart, t.multilinestringends[i])
-				return tk, false, !terminated, multilinestringstart, t.multilinestringends[i]
+				return t.readmultilinestring(start, true, multilinestringstart, t.multilinestringends[i])
 			}
 		case 2:
 			if c.r == multilinestringstart[0] && t.peek().r == multilinestringstart[1] {
-				tk, terminated := t.readmultilinestring(start, multilinestringstart, t.multilinestringends[i])
-				return tk, false, !terminated, multilinestringstart, t.multilinestringends[i]
+				return t.readmultilinestring(start, true, multilinestringstart, t.multilinestringends[i])
 			}
 		case 3:
 			if c.r == multilinestringstart[0] && t.peek().r == multilinestringstart[1] && t.peek2().r == multilinestringstart[2] {
-				tk, terminated := t.readmultilinestring(start, multilinestringstart, t.multilinestringends[i])
-				return tk, false, !terminated, multilinestringstart, t.multilinestringends[i]
+				return t.readmultilinestring(start, true, multilinestringstart, t.multilinestringends[i])
 			}
 		}
 	}
 
 	if unicode.IsDigit(c.r) || (c.r == '.' && unicode.IsDigit(t.peek().r)) {
-		return t.readnumber(start), false, false, nil, nil
+		return t.readnumber(start)
 	}
 
 	if unicode.IsLetter(c.r) || c.r == '_' {
-		return t.readident(start), false, false, nil, nil
+		return t.readident(start)
 	}
 
-	return t.readsymbol(start), false, false, nil, nil
+	return t.readsymbol(start)
 }
 
-func (t *clikelangtokenizer) peek() *character {
+func (t *clikelanglinetokenizer) peek() *character {
 	if t.line.length() <= t.pos+1 {
 		return nilch
 	}
 	return t.line.buffer[t.pos+1]
 }
 
-func (t *clikelangtokenizer) peek2() *character {
+func (t *clikelanglinetokenizer) peek2() *character {
 	if t.line.length() <= t.pos+2 {
 		return nilch
 	}
 	return t.line.buffer[t.pos+2]
 }
 
-func (t *clikelangtokenizer) readwhitespace(start int) *token {
-	for t.pos < t.line.length() && (unicode.IsSpace(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].tab) {
+func (t *clikelanglinetokenizer) readwhitespace(start int) *token {
+	for t.pos < t.line.length()-1 && (unicode.IsSpace(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].tab) {
 		t.pos++
 	}
-	return &token{typ: tk_whitespace, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	return &token{typ: tk_whitespace, start: start, end: t.pos}
 }
 
-func (t *clikelangtokenizer) readlinecomment(start int) *token {
+func (t *clikelanglinetokenizer) readlinecomment(start int) *token {
 	t.pos += len(t.linecommentstart)
 
-	for t.pos < t.line.length() {
+	for t.pos < t.line.length()-1 { // skip nl
 		t.pos++
 	}
 
-	return &token{typ: tk_linecomment, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	return &token{typ: tk_linecomment, start: start, end: t.pos}
 }
 
-func (t *clikelangtokenizer) readblockcomment(start int) (*token, bool) {
-	t.pos += len(t.blockcommentstart)
+func (t *clikelanglinetokenizer) readblockcomment(start int, firstline bool) *token {
+	if firstline {
+		t.pos += len(t.blockcommentstart)
+	}
 
 	terminated := false
-	for t.pos < t.line.length() {
+	for t.pos < t.line.length()-1 { // skip nl
 		if t.line.length()-1 < t.pos+len(t.blockcommentend) {
 			t.pos++
 			continue
@@ -628,13 +625,13 @@ func (t *clikelangtokenizer) readblockcomment(start int) (*token, bool) {
 		t.pos++
 	}
 
-	return &token{typ: tk_blockcomment, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}, terminated
+	return &token{typ: tk_blockcomment, start: start, end: t.pos, multilinecommentterminated: terminated}
 }
 
-func (t *clikelangtokenizer) readstring(start int, startquote, endquote []rune, considerescape bool) *token {
+func (t *clikelanglinetokenizer) readstring(start int, startquote, endquote []rune, considerescape bool) *token {
 	t.pos += len(startquote)
 
-	for t.pos < t.line.length() {
+	for t.pos < t.line.length()-1 { // skip nl
 		if t.line.length()-1 < t.pos+len(endquote) {
 			t.pos++
 			continue
@@ -653,7 +650,7 @@ func (t *clikelangtokenizer) readstring(start int, startquote, endquote []rune, 
 		}
 
 		if considerescape {
-			if t.line.buffer[t.pos].r == '\\' && t.pos+1 < t.line.length() {
+			if t.line.buffer[t.pos].r == '\\' && t.pos+1 < t.line.length()-1 {
 				t.pos += 2
 			} else {
 				t.pos++
@@ -663,14 +660,16 @@ func (t *clikelangtokenizer) readstring(start int, startquote, endquote []rune, 
 		}
 	}
 
-	return &token{typ: tk_string, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	return &token{typ: tk_string, start: start, end: t.pos}
 }
 
-func (t *clikelangtokenizer) readmultilinestring(start int, startquote, endquote []rune) (*token, bool) {
-	t.pos += len(startquote)
+func (t *clikelanglinetokenizer) readmultilinestring(start int, firstline bool, startquote, endquote []rune) *token {
+	if firstline {
+		t.pos += len(startquote)
+	}
 
 	terminated := false
-	for t.pos < t.line.length() {
+	for t.pos < t.line.length()-1 { // skip nl
 		if t.line.length()-1 < t.pos+len(endquote) {
 			t.pos++
 			continue
@@ -693,10 +692,10 @@ func (t *clikelangtokenizer) readmultilinestring(start int, startquote, endquote
 		t.pos++
 	}
 
-	return &token{typ: tk_multilinestring, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}, terminated
+	return &token{typ: tk_multilinestring, start: start, end: t.pos, multilinestringterminated: terminated, multilinestringstart: startquote, multilinestringend: endquote}
 }
 
-func (t *clikelangtokenizer) readnumber(start int) *token {
+func (t *clikelanglinetokenizer) readnumber(start int) *token {
 	for t.pos < t.line.length() && (unicode.IsDigit(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].r == '_') {
 		t.pos++
 	}
@@ -718,10 +717,10 @@ func (t *clikelangtokenizer) readnumber(start int) *token {
 		}
 	}
 
-	return &token{typ: tk_number, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	return &token{typ: tk_number, start: start, end: t.pos}
 }
 
-func (t *clikelangtokenizer) readident(start int) *token {
+func (t *clikelanglinetokenizer) readident(start int) *token {
 	for t.pos < t.line.length() && (unicode.IsLetter(t.line.buffer[t.pos].r) || unicode.IsDigit(t.line.buffer[t.pos].r) || t.line.buffer[t.pos].r == '_') {
 		t.pos++
 	}
@@ -733,38 +732,39 @@ func (t *clikelangtokenizer) readident(start int) *token {
 		typ = tk_keyword
 	}
 
-	return &token{typ: typ, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	return &token{typ: typ, start: start, end: t.pos}
 }
 
-func (t *clikelangtokenizer) readsymbol(start int) *token {
-	if t.pos+3 < t.line.length() {
+func (t *clikelanglinetokenizer) readsymbol(start int) *token {
+	if t.pos+3 < t.line.length()-1 {
 		threechars := t.line.substring(t.pos, t.pos+3)
 		if slices.Contains(t.operators3, threechars) {
 			t.pos += 3
-			return &token{typ: tk_operator, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+			return &token{typ: tk_operator, start: start, end: t.pos}
 		}
 	}
 
-	if t.pos+2 < t.line.length() {
+	if t.pos+2 < t.line.length()-1 {
 		twochars := t.line.substring(t.pos, t.pos+2)
 		if slices.Contains(t.operators2, twochars) {
 			t.pos += 2
-			return &token{typ: tk_operator, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+			return &token{typ: tk_operator, start: start, end: t.pos}
 		}
 	}
 
-	t.pos++
-
 	char := string(t.line.buffer[t.pos].r)
 	if slices.Contains(t.operators, char) {
-		return &token{typ: tk_operator, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+		t.pos++
+		return &token{typ: tk_operator, start: start, end: t.pos}
 	}
 
 	if slices.Contains(t.symbols, char) {
-		return &token{typ: tk_symbol, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+		t.pos++
+		return &token{typ: tk_symbol, start: start, end: t.pos}
 	}
 
-	return &token{typ: tk_unknown, chars: t.line.buffer[start:t.pos], start: start, end: t.pos}
+	t.pos++
+	return &token{typ: tk_unknown, start: start, end: t.pos}
 }
 
 /*
@@ -774,44 +774,48 @@ func (t *clikelangtokenizer) readsymbol(start int) *token {
  */
 
 type highlighter interface {
-	highlight(l *line, tokens []*token)
+	highlight(l *line, tokens []*token) []int
 }
 
 type nophighlighter struct{}
 
-func (h nophighlighter) highlight(l *line, tokens []*token) {
+func (h nophighlighter) highlight(l *line, tokens []*token) []int {
+	colors := make([]int, l.length())
 	for i := range l.buffer {
-		l.colors[i] = -1
+		colors[i] = -1
 	}
+	return colors
 }
 
 /* golang highlighter */
 
 type clikelangbasichighlighter struct{}
 
-func (h clikelangbasichighlighter) highlight(l *line, tokens []*token) {
+func (h clikelangbasichighlighter) highlight(l *line, tokens []*token) []int {
+	colors := make([]int, l.length())
 	for _, token := range tokens {
-		for i := token.start; i < token.end; i++ {
+		for i := token.start; i < token.end+1; i++ {
 			switch token.typ {
-			case tk_unknown, tk_whitespace, tk_eol:
-				l.colors[i] = -1
+			case tk_unknown, tk_whitespace:
+				colors[i] = -1
 			case tk_ident:
-				l.colors[i] = 106
+				colors[i] = 6
 			case tk_keyword:
-				l.colors[i] = 66
+				colors[i] = 30
 			case tk_string, tk_multilinestring:
-				l.colors[i] = 148
+				colors[i] = 70
 			case tk_number:
-				l.colors[i] = 46
+				colors[i] = 96
 			case tk_operator:
-				l.colors[i] = 34
+				colors[i] = 25
 			case tk_symbol:
-				l.colors[i] = 10
+				colors[i] = -1
 			case tk_linecomment, tk_blockcomment:
-				l.colors[i] = 248
+				colors[i] = 240
 			}
 		}
 	}
+	return colors
 }
 
 /*
@@ -826,9 +830,7 @@ type file interface {
 }
 
 type screen struct {
-	term *screenterm
-	// tokenizer       tokenizer
-	// highlighter     highlighter
+	term            *screenterm
 	width           int
 	height          int
 	lines           []*line
@@ -877,20 +879,25 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 	}
 
 	s.updatelinenumberwidth()
-
-	for i := range s.lines {
-		s.highlightline(s.lines[i])
-	}
+	s.highlight()
 
 	return s
 }
 
-func (s *screen) highlightline(l *line) {
-	var t tokenizer
+func stringerjoin[T fmt.Stringer](arr []T, sep string) string {
+	sarr := make([]string, len(arr))
+	for i := range arr {
+		sarr[i] = arr[i].String()
+	}
+	return strings.Join(sarr, sep)
+}
+
+func (s *screen) highlight() {
+	var t linetokenizer
 	var h highlighter
 
 	switch {
-	case strings.HasSuffix(s.file.Name(), ".go_"):
+	case strings.HasSuffix(s.file.Name(), ".go_"), strings.HasSuffix(s.file.Name(), ".go"):
 		t = newgolangtokenizer()
 		h = clikelangbasichighlighter{}
 
@@ -899,12 +906,16 @@ func (s *screen) highlightline(l *line) {
 		h = nophighlighter{}
 	}
 
-	tokens := t.tokenizeline(l)
-	tokenstrs := make([]string, len(tokens))
-	for i := range tokens {
-		tokenstrs[i] = tokens[i].String()
+	var inmultilinecomment bool
+	var inmultilinestring bool
+	var multilinestrstart, multilinestrend []rune
+	var tokens []*token
+	for i := range s.lines {
+		tokens, inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend = t.tokenizeline(s.lines[i], inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend)
+		debug("line: %v\ntokens: %v\n", s.lines[i], stringerjoin(tokens, ", "))
+		s.lines[i].colors = h.highlight(s.lines[i], tokens)
+		debug("highlight done!\n")
 	}
-	h.highlight(l, tokens)
 }
 
 func (s *screen) updatelinenumberwidth() {
@@ -1462,10 +1473,6 @@ func (s *screen) yankch() {
 	s.yankedch = s.curline().buffer[s.xidx()]
 }
 
-func (s *screen) pastech() {
-	s.yankedch = s.curline().buffer[s.xidx()]
-}
-
 // delete a line
 func (s *screen) delline(y int) {
 	for i := y; i < len(s.lines); i++ {
@@ -1815,10 +1822,6 @@ type editor struct {
 	cmdline       *line
 	cmdx          int
 	msg           *line
-}
-
-func neweditor(term *screenterm) *editor {
-	return &editor{term: term}
 }
 
 func (e *editor) changemode(mode mode) {
