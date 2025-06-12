@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -15,7 +16,22 @@ import (
 	"golang.org/x/term"
 )
 
-var _debug = os.Getenv("TURTLE_DEBUG") != ""
+var _debuglevel int
+
+func init() {
+	d := os.Getenv("TURTLE_DEBUG")
+	if d == "" {
+		_debuglevel = 0
+		return
+	}
+
+	i, err := strconv.ParseInt(d, 10, 64)
+	if err != nil {
+		panic("TURTLE_DEBUG must be an number")
+	}
+
+	_debuglevel = int(i)
+}
 
 /*
  * mode
@@ -106,8 +122,7 @@ func (c *character) String() string {
  */
 
 type line struct {
-	buffer []*character
-	// tokens             []*token
+	buffer             []*character
 	colors             []int
 	inmultilinecomment bool
 	inmultilinestring  bool
@@ -221,8 +236,7 @@ func (l *line) equal(s string) bool {
 
 func (l *line) copy() *line {
 	copy := &line{
-		buffer: make([]*character, len(l.buffer)),
-		// tokens:             make([]*token, len(l.tokens)),
+		buffer:             make([]*character, len(l.buffer)),
 		colors:             make([]int, len(l.colors)),
 		inmultilinecomment: l.inmultilinecomment,
 		inmultilinestring:  l.inmultilinestring,
@@ -230,9 +244,6 @@ func (l *line) copy() *line {
 	for i := range l.buffer {
 		copy.buffer[i] = l.buffer[i].copy()
 	}
-	// for i := range l.tokens {
-	// 	copy.tokens[i] = l.tokens[i].copy()
-	// }
 	for i := range l.colors {
 		copy.colors[i] = l.colors[i]
 	}
@@ -328,6 +339,7 @@ const (
 	tk_linecomment
 	tk_blockcomment
 	tk_whitespace
+	tk_nl
 )
 
 func (t tokentype) String() string {
@@ -354,6 +366,8 @@ func (t tokentype) String() string {
 		return "blockcomment"
 	case tk_whitespace:
 		return "whitespace"
+	case tk_nl:
+		return "nl"
 	default:
 		panic("unknown tokentype")
 	}
@@ -375,7 +389,7 @@ func (t *token) String() string {
 }
 
 type linetokenizer interface {
-	tokenizeline(l *line, inmultilinecomment, inmultilinestring bool, multilinestrstart, multilinestrend []rune) ([]*token, bool, bool, []rune, []rune)
+	tokenizeline(l *line, prevlinestate *linestate) ([]*token, *linestate)
 }
 
 type noplinetokenizer struct{}
@@ -384,12 +398,12 @@ func newnoptokenizer() *noplinetokenizer {
 	return &noplinetokenizer{}
 }
 
-func (t *noplinetokenizer) tokenizeline(l *line, inmultilinecomment, inmultilinestring bool, multilinestrstart, multilinestrend []rune) ([]*token, bool, bool, []rune, []rune) {
+func (t *noplinetokenizer) tokenizeline(l *line, prevlinestate *linestate) ([]*token, *linestate) {
 	if l.length() == 1 {
-		return []*token{}, false, false, nil, nil
+		return []*token{}, &linestate{}
 	}
 
-	return []*token{{typ: tk_unknown, start: 0, end: l.length() - 1}}, false, false, nil, nil
+	return []*token{{typ: tk_unknown, start: 0, end: l.length() - 1}}, &linestate{}
 }
 
 func newgolangtokenizer() *clikelanglinetokenizer {
@@ -439,11 +453,13 @@ type clikelanglinetokenizer struct {
 	operators3 []string // 3 characters
 }
 
-func (t *clikelanglinetokenizer) tokenizeline(l *line, inmultilinecomment, inmultilinestring bool, multilinestrstart, multilinestrend []rune) ([]*token, bool, bool, []rune, []rune) {
+func (t *clikelanglinetokenizer) tokenizeline(l *line, prevlinestate *linestate) ([]*token, *linestate) {
 	t.line = l
 	t.pos = 0
 
 	var tokens []*token
+	inmultilinecomment, inmultilinestring := prevlinestate.inmultilinecomment, prevlinestate.inmultilinestring
+	multilinestrstart, multilinestrend := prevlinestate.multilinestrstart, prevlinestate.multilinestrend
 	for t.pos < t.line.length()-1 {
 		var tk *token
 
@@ -454,26 +470,25 @@ func (t *clikelanglinetokenizer) tokenizeline(l *line, inmultilinecomment, inmul
 		case inmultilinestring:
 			tk = t.readmultilinestring(0, false, multilinestrstart, multilinestrend)
 			inmultilinestring = !tk.multilinestringterminated
+			multilinestrstart = tk.multilinestringstart
+			multilinestrend = tk.multilinestringend
 		default:
 			tk = t.nexttoken()
+			if tk.typ == tk_blockcomment {
+				inmultilinecomment = !tk.multilinecommentterminated
+			} else if tk.typ == tk_multilinestring {
+				inmultilinestring = !tk.multilinestringterminated
+				multilinestrstart = tk.multilinestringstart
+				multilinestrend = tk.multilinestringend
+			}
 		}
 
 		tokens = append(tokens, tk)
 	}
 
-	if len(tokens) == 0 {
-		return tokens, false, false, nil, nil
-	}
+	tokens = append(tokens, &token{typ: tk_nl, start: t.line.length(), end: t.line.length() - 1})
 
-	lasttoken := tokens[len(tokens)-1] // except eol
-	switch lasttoken.typ {
-	case tk_blockcomment:
-		return tokens, !lasttoken.multilinecommentterminated, false, nil, nil
-	case tk_multilinestring:
-		return tokens, false, !lasttoken.multilinestringterminated, lasttoken.multilinestringstart, lasttoken.multilinestringend
-	default:
-		return tokens, false, false, nil, nil
-	}
+	return tokens, &linestate{inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend}
 }
 
 func (t *clikelanglinetokenizer) nexttoken() *token {
@@ -829,11 +844,27 @@ type file interface {
 	Seek(offset int64, whence int) (int64, error)
 }
 
+type linestate struct {
+	inmultilinecomment bool
+	inmultilinestring  bool
+	multilinestrstart  []rune
+	multilinestrend    []rune
+}
+
+func (s *linestate) equals(s2 *linestate) bool {
+	return s.inmultilinecomment == s2.inmultilinecomment && s.inmultilinestring == s2.inmultilinestring
+}
+
+func (s *linestate) String() string {
+	return fmt.Sprintf("{inmultilinecomment: %v, inmultilinestring: %v, multilinestrstart: %v, multilinestrend: %v}", s.inmultilinecomment, s.inmultilinestring, s.multilinestrstart, s.multilinestrend)
+}
+
 type screen struct {
 	term            *screenterm
 	width           int
 	height          int
 	lines           []*line
+	linestates      []*linestate
 	file            file
 	linenumberwidth int
 
@@ -847,9 +878,10 @@ type screen struct {
 	xoffset int
 	yoffset int
 
-	scrolled     bool
-	changedlines []int
-	changemode   func(mode mode)
+	scrolled              bool
+	changedlines          []int
+	highlightupdatedlines []int
+	changemode            func(mode mode)
 
 	dirty bool
 }
@@ -878,6 +910,8 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 		s.lines = []*line{newemptyline()}
 	}
 
+	s.linestates = make([]*linestate, len(s.lines))
+
 	s.updatelinenumberwidth()
 	s.highlight()
 
@@ -898,13 +932,16 @@ func (s *screen) highlight() {
 		h = nophighlighter{}
 	}
 
-	var inmultilinecomment bool
-	var inmultilinestring bool
-	var multilinestrstart, multilinestrend []rune
-	var tokens []*token
 	for i := range s.lines {
-		tokens, inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend = t.tokenizeline(s.lines[i], inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend)
+		prevlinestate := &linestate{}
+		if i != 0 {
+			prevlinestate = s.linestates[i-1]
+		}
+		tokens, curlinestate := t.tokenizeline(s.lines[i], prevlinestate)
 		s.lines[i].colors = h.highlight(s.lines[i], tokens)
+		s.linestates[i] = curlinestate
+
+		// debug(1, "highlight: line: %v, tokens: %v, prevstate: %v, curstate: %v\n", s.lines[i], tokens, prevlinestate, curlinestate)
 	}
 }
 
@@ -1054,11 +1091,12 @@ func (s *screen) render(first bool) {
 				fmt.Fprint(s.term, displine(s.yoffset+i))
 			}
 		}
-	} else if len(s.changedlines) != 0 {
+	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 {
 		// udpate only changed lines
-		slices.Sort(s.changedlines)
-		s.changedlines = slices.Compact(s.changedlines)
-		for _, l := range s.changedlines {
+		lines := slices.Concat(s.changedlines, s.highlightupdatedlines)
+		slices.Sort(lines)
+		lines = slices.Compact(lines)
+		for _, l := range lines {
 			// if changed line is not shown on the screen, skip
 			if l < s.yoffset || s.height-2 < l-s.yoffset {
 				continue
@@ -1079,7 +1117,56 @@ func (s *screen) render(first bool) {
 	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
 	s.changedlines = []int{}
+	s.highlightupdatedlines = []int{}
 	s.scrolled = false
+}
+
+func (s *screen) highlightchangedlines() {
+	if len(s.changedlines) == 0 {
+		return
+	}
+
+	slices.Sort(s.changedlines)
+	s.changedlines = slices.Compact(s.changedlines)
+
+	for i := s.changedlines[0]; i < len(s.lines); i++ {
+		var t linetokenizer
+		var h highlighter
+
+		switch {
+		case strings.HasSuffix(s.file.Name(), ".go_"), strings.HasSuffix(s.file.Name(), ".go"):
+			t = newgolangtokenizer()
+			h = clikelangbasichighlighter{}
+
+		default:
+			t = newnoptokenizer()
+			h = nophighlighter{}
+		}
+
+		curstate := s.linestates[i]
+
+		prevlinestate := &linestate{}
+		if i != 0 {
+			prevlinestate = s.linestates[i-1]
+		}
+
+		tokens, newstate := t.tokenizeline(s.lines[i], prevlinestate)
+		s.lines[i].colors = h.highlight(s.lines[i], tokens)
+		s.highlightupdatedlines = append(s.highlightupdatedlines, i)
+
+		// debug(1, "highlightchangedlines: cur: %v, prev: %v, new: %v, tokens: %v\n", curstate, prevlinestate, newstate, tokens)
+
+		if curstate.equals(newstate) {
+			s.linestates[i] = newstate
+			break
+		}
+
+		s.linestates[i] = newstate
+	}
+}
+
+func (s *screen) debugline() {
+	debug(0, "debug line (%v): '%v', state: %v, colors: %v\n", s.y, s.curline(), s.linestates[s.y], s.lines[s.y].colors)
 }
 
 func (s *screen) handle(mode mode, buff *input, reader *reader) {
@@ -1133,6 +1220,9 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 
 		case _not_special_key:
 			switch buff.r {
+			case '\\':
+				s.debugline()
+
 			case 'd':
 				switch {
 				case s.xidx() == s.curline().length()-1:
@@ -1296,6 +1386,8 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 	default:
 		panic(fmt.Sprintf("cannot handle mode %v", mode))
 	}
+
+	s.highlightchangedlines()
 }
 
 func (s *screen) String() string {
@@ -1993,7 +2085,7 @@ func (e *editor) String() string {
 }
 
 func (e *editor) debug() {
-	debug("%v\n", e)
+	debug(2, "%v\n", e)
 }
 
 func start(term terminal, in io.Reader, file file) {
@@ -2372,7 +2464,7 @@ func (r *reader) read() (i *input) {
 
 	defer func() {
 		if i.special == _unknown {
-			debug("read: unknown input detected: %v\n", string(dbg))
+			debug(1, "read: unknown input detected: %v\n", string(dbg))
 		}
 	}()
 
@@ -2514,8 +2606,8 @@ func (r *reader) read() (i *input) {
 	return &input{special: _unknown}
 }
 
-func debug(format string, a ...any) (int, error) {
-	if _debug {
+func debug(level int, format string, a ...any) (int, error) {
+	if level <= _debuglevel {
 		return fmt.Fprintf(os.Stderr, format, a...)
 	}
 	return 0, nil

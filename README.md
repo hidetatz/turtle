@@ -83,7 +83,8 @@ In insert mode, you can edit the text.
 
 ### debug
 
-Logs put via debug() are written to stderr as stdout is used by the editor itself.
+When TURTLE_DEBUG environment variable is set, the debug log via debug() is printed to stderr.
+The value is a level of log (bigger is more verbose).
 
 ```shell
 # run with stderr redirected to another file
