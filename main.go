@@ -884,14 +884,6 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 	return s
 }
 
-func stringerjoin[T fmt.Stringer](arr []T, sep string) string {
-	sarr := make([]string, len(arr))
-	for i := range arr {
-		sarr[i] = arr[i].String()
-	}
-	return strings.Join(sarr, sep)
-}
-
 func (s *screen) highlight() {
 	var t linetokenizer
 	var h highlighter
@@ -912,9 +904,7 @@ func (s *screen) highlight() {
 	var tokens []*token
 	for i := range s.lines {
 		tokens, inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend = t.tokenizeline(s.lines[i], inmultilinecomment, inmultilinestring, multilinestrstart, multilinestrend)
-		debug("line: %v\ntokens: %v\n", s.lines[i], stringerjoin(tokens, ", "))
 		s.lines[i].colors = h.highlight(s.lines[i], tokens)
-		debug("highlight done!\n")
 	}
 }
 
