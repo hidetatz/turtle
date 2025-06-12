@@ -61,6 +61,7 @@ For example, `3j` moves the cursor down by 3 times.
 * `Ctrl-w` `j`: move to below window
 * `Ctrl-w` `k`: move to above window
 * `Ctrl-w` `l`: move to right window
+* `\`: show debug message on the current line
 
 ### command mode
 
