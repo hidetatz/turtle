@@ -113,10 +113,6 @@ func (c *character) equal(c2 *character) bool {
 	return c.r == c2.r
 }
 
-func (c *character) isfullwidth() bool {
-	return c.width == 2
-}
-
 func (c *character) String() string {
 	return c.disp
 }
@@ -296,7 +292,7 @@ func (l *line) display(from, width int, colors []int) string {
 	var str string
 	curwidth := 0
 	for i := range len(runes) {
-		if width < curwidth {
+		if from+width < curwidth {
 			break
 		}
 
