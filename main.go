@@ -980,23 +980,21 @@ type screen struct {
 	scrolled              bool
 	changedlines          []int
 	highlightupdatedlines []int
-	changemode            func(mode mode)
 
 	dirty bool
 }
 
-func newscreen(term terminal, x, y, width, height int, file file, changemode func(mode mode), theme *theme) *screen {
+func newscreen(term terminal, x, y, width, height int, file file, theme *theme) *screen {
 	s := &screen{
-		term:       &screenterm{term: term, width: width, x: x, y: y},
-		height:     height,
-		width:      width,
-		file:       file,
-		x:          0,
-		y:          0,
-		xoffset:    0,
-		yoffset:    0,
-		lines:      []*line{},
-		changemode: changemode,
+		term:    &screenterm{term: term, width: width, x: x, y: y},
+		height:  height,
+		width:   width,
+		file:    file,
+		x:       0,
+		y:       0,
+		xoffset: 0,
+		yoffset: 0,
+		lines:   []*line{},
 	}
 
 	// read file and initialize s.lines
@@ -1246,10 +1244,10 @@ func (s *screen) highlightchangedlines() {
 	}
 }
 
-func (s *screen) handle(mode mode, buff *input, reader *reader) {
+func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 	num := 1
 	isnum, n := buff.isnumber()
-	if mode == normal && isnum {
+	if curmode == normal && isnum {
 		num = n
 		for {
 			next := reader.read()
@@ -1268,7 +1266,9 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 		num = 1
 	}
 
-	switch mode {
+	newmode := curmode
+
+	switch curmode {
 	case normal:
 		switch buff.special {
 		case _left:
@@ -1317,12 +1317,12 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 				s.insline(down)
 				s.movecursor(down, 1)
 				s.x = 0
-				s.changemode(insert)
+				newmode = insert
 
 			case 'O':
 				s.insline(up)
 				s.x = 0
-				s.changemode(insert)
+				newmode = insert
 
 			case 'G':
 				s.gotoline(num)
@@ -1413,7 +1413,7 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 			s.movecursor(right, 1)
 
 		case _esc:
-			s.changemode(normal)
+			newmode = normal
 
 		case _cr:
 			curline := s.curline().copy()
@@ -1461,10 +1461,11 @@ func (s *screen) handle(mode mode, buff *input, reader *reader) {
 		}
 
 	default:
-		panic(fmt.Sprintf("cannot handle mode %v", mode))
+		panic(fmt.Sprintf("cannot handle mode %v", curmode))
 	}
 
 	s.highlightchangedlines()
+	return newmode
 }
 
 func (s *screen) String() string {
@@ -1714,13 +1715,13 @@ type window struct {
 	direction direction // down or right
 }
 
-func newleafwindow(term terminal, x, y, width, height int, file file, modechange func(mode mode), theme *theme) *window {
+func newleafwindow(term terminal, x, y, width, height int, file file, theme *theme) *window {
 	return &window{
 		x:      x,
 		y:      y,
 		width:  width,
 		height: height,
-		screen: newscreen(term, x, y, width, height, file, modechange, theme),
+		screen: newscreen(term, x, y, width, height, file, theme),
 	}
 }
 
@@ -1732,16 +1733,16 @@ func (w *window) isleaf() bool {
 	return len(w.children) == 0
 }
 
-func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file, theme *theme) *window {
+func (w *window) split(term terminal, direction direction, file file, theme *theme) *window {
 	// when the given directions is the same with parent window, add new window as sibling of w.
 	if w.parent != nil && w.parent.direction == direction {
-		return w.parent.inschildafter(w, term, modechange, file, theme)
+		return w.parent.inschildafter(w, term, file, theme)
 	}
 
 	// when no parent exists (= w is root) or exists but direction is different,
 	// make the leaf window w to inner window, then add new window as child.
 	w.toinner(direction)
-	return w.inschildafter(w.children[0], term, modechange, file, theme)
+	return w.inschildafter(w.children[0], term, file, theme)
 }
 
 func (w *window) toinner(direction direction) {
@@ -1755,9 +1756,9 @@ func (w *window) toinner(direction direction) {
 	w.screen = nil
 }
 
-func (w *window) inschildafter(after *window, term terminal, modechange func(mode mode), file file, theme *theme) *window {
+func (w *window) inschildafter(after *window, term terminal, file file, theme *theme) *window {
 	// insert a child node after $after then do resize.
-	newwin := newleafwindow(term, 0, 0, 0, 0, file, modechange, theme)
+	newwin := newleafwindow(term, 0, 0, 0, 0, file, theme)
 	newwin.parent = w
 	idx := slices.Index(w.children, after)
 	if idx == -1 {
@@ -2009,7 +2010,7 @@ func (e *editor) split(filename string, direction direction) {
 		return
 	}
 
-	e.activewin = e.activewin.split(e.term.term, func(mode mode) { e.mode = mode }, direction, file, e.theme)
+	e.activewin = e.activewin.split(e.term.term, direction, file, e.theme)
 	e.windowchanged = true
 }
 
@@ -2193,7 +2194,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 		msg:     newemptyline(),
 	}
 
-	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode }, e.theme)
+	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, e.theme)
 	e.activewin = e.rootwin
 	e.render(true)
 
@@ -2304,10 +2305,12 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 				case 'i':
 					e.changemode(insert)
 				default:
-					e.activewin.screen.handle(e.mode, buff, reader)
+					newmode := e.activewin.screen.handle(e.mode, buff, reader)
+					e.changemode(newmode)
 				}
 			default:
-				e.activewin.screen.handle(e.mode, buff, reader)
+				newmode := e.activewin.screen.handle(e.mode, buff, reader)
+				e.changemode(newmode)
 			}
 
 		case insert:
@@ -2315,7 +2318,8 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 			case _esc:
 				e.changemode(normal)
 			default:
-				e.activewin.screen.handle(e.mode, buff, reader)
+				newmode := e.activewin.screen.handle(e.mode, buff, reader)
+				e.changemode(newmode)
 			}
 
 		default:
