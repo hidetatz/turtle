@@ -16,7 +16,7 @@ go build
 go install
 ```
 
-### run
+### start editor
 
 ```shell
 # run with empty buffer
@@ -25,6 +25,15 @@ tt
 # open and edit a file
 tt test.txt
 ```
+
+Some behavior can be customized via command line flag.
+
+* `--theme` configures the color theme. Default is "doraemon". Choices are:
+  - "doraemon"
+  - "noby" (or "nobita")
+  - "sue" (or "shizuka")
+  - "sneech" (or "suneo")
+  - "big-g" (or "gian")
 
 ## keymaps
 

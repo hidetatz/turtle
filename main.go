@@ -313,13 +313,87 @@ func (l *line) display(from, width int, colors []int) string {
 
 /*
  * highlighter
- * color command:
- * for i in {0..256} ; do printf "\e[38;5;${i}m%3d \e[0m" $i ; [ $((i % 16)) -eq 0 ] && echo ; done
  */
 
 type highlighter interface {
 	highlightline(l *line, prevlineattr *lineattribute) *lineattribute
 }
+
+// color command:
+// for i in {0..256} ; do printf "\e[38;5;${i}m%3d \e[0m" $i ; [ $((i % 16)) -eq 0 ] && echo ; done
+type theme struct {
+	colorident           int
+	colorkeyword         int
+	coloroperator        int
+	colorsymbol          int
+	colorstring          int
+	colormultilinestring int
+	colornumber          int
+	colorlinecomment     int
+	colorblockcomment    int
+}
+
+var (
+	theme_doraemon = &theme{
+		colorident:           32,
+		colorkeyword:         -1,
+		coloroperator:        220,
+		colorsymbol:          220,
+		colorstring:          160,
+		colormultilinestring: 160,
+		colornumber:          202,
+		colorlinecomment:     240,
+		colorblockcomment:    240,
+	}
+
+	theme_nobita = &theme{
+		colorident:           11,
+		colorkeyword:         -1,
+		coloroperator:        27,
+		colorsymbol:          27,
+		colorstring:          180,
+		colormultilinestring: 180,
+		colornumber:          38,
+		colorlinecomment:     240,
+		colorblockcomment:    240,
+	}
+
+	theme_shizuka = &theme{
+		colorident:           176,
+		colorkeyword:         217,
+		coloroperator:        125,
+		colorsymbol:          125,
+		colorstring:          125,
+		colormultilinestring: 125,
+		colornumber:          11,
+		colorlinecomment:     240,
+		colorblockcomment:    240,
+	}
+
+	theme_suneo = &theme{
+		colorident:           34,
+		colorkeyword:         217,
+		coloroperator:        130,
+		colorsymbol:          130,
+		colorstring:          220,
+		colormultilinestring: 220,
+		colornumber:          -1,
+		colorlinecomment:     240,
+		colorblockcomment:    240,
+	}
+
+	theme_gian = &theme{
+		colorident:           208,
+		colorkeyword:         186,
+		coloroperator:        21,
+		colorsymbol:          21,
+		colorstring:          216,
+		colormultilinestring: 216,
+		colornumber:          172,
+		colorlinecomment:     240,
+		colorblockcomment:    240,
+	}
+)
 
 type nophighlighter struct{}
 
@@ -329,10 +403,12 @@ func (h nophighlighter) highlightline(l *line, _ *lineattribute) *lineattribute 
 
 type clikelangbasichighlighter struct {
 	linetokenizer *clikelanglinetokenizer
+	theme         *theme
 }
 
-func newgolanghighlighter() *clikelangbasichighlighter {
+func newgolanghighlighter(theme *theme) *clikelangbasichighlighter {
 	return &clikelangbasichighlighter{
+		theme: theme,
 		linetokenizer: &clikelanglinetokenizer{
 			linecommentstart:      []rune{'/', '/'},
 			blockcommentstart:     []rune{'/', '*'},
@@ -347,6 +423,16 @@ func newgolanghighlighter() *clikelangbasichighlighter {
 				"type", "struct", "interface", "map", "select", "go", "chan", "iota", "nil", "true", "false",
 				"bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "complex64", "complex128",
 				"string", "int", "uint", "uintptr", "byte", "rune", "any", "error", "comparable",
+				"archive", "tar", "zip", "bufio", "builtin", "bytes", "cmp", "compress", "bzip2", "flate", "gzip", "lzw", "zlib", "container", "heap",
+				"list", "ring", "context", "crypto", "aes", "cipher", "des", "dsa", "ecdh", "ecdsa", "ed25519", "elliptic", "fips140", "hkdf", "hmac", "md5", "mlkem", "pbkdf2", "rand", "rc4",
+				"rsa", "sha1", "sha256", "sha3", "sha512", "subtle", "tls", "x509", "pkix", "database", "sql", "driver", "debug", "buildinfo", "dwarf", "elf", "gosym", "macho", "pe", "plan9obj", "embed",
+				"encoding", "ascii85", "asn1", "base32", "base64", "binary", "csv", "gob", "hex", "json", "pem", "xml", "errors", "expvar", "flag", "fmt", "go", "ast", "build", "constraint", "constant",
+				"doc", "comment", "format", "importer", "parser", "printer", "scanner", "token", "types", "version", "hash", "adler32", "crc32", "crc64", "fnv", "maphash", "html", "template", "image", "color",
+				"palette", "draw", "gif", "jpeg", "png", "index", "suffixarray", "io", "fs", "ioutil", "iter", "log", "slog", "syslog", "maps", "math", "big", "bits", "cmplx", "rand", "mime",
+				"multipart", "quotedprintable", "net", "http", "cgi", "cookiejar", "fcgi", "httptest", "httptrace", "httputil", "pprof", "mail", "netip", "rpc", "jsonrpc", "smtp", "textproto", "url", "os", "exec",
+				"signal", "user", "path", "filepath", "plugin", "reflect", "regexp", "syntax", "runtime", "cgo", "coverage", "debug", "metrics", "pprof", "race", "trace",
+				"slices", "sort", "strconv", "strings", "structs", "sync", "atomic", "syscall", "js", "testing", "fstest", "iotest", "quick", "slogtest", "synctest",
+				"text", "scanner", "tabwriter", "template", "parse", "time", "tzdata", "unicode", "utf16", "utf8", "unique", "unsafe", "weak",
 			},
 			symbols:    []string{"[", "]", "(", ")", "{", "}", ":", ";", ",", "."},
 			operators:  []string{"!", "+", "-", "*", "/", "%", "&", "|", "=", "<", ">", "~"},
@@ -356,8 +442,9 @@ func newgolanghighlighter() *clikelangbasichighlighter {
 	}
 }
 
-func newpythonhighlighter() *clikelangbasichighlighter {
+func newpythonhighlighter(theme *theme) *clikelangbasichighlighter {
 	return &clikelangbasichighlighter{
+		theme: theme,
 		linetokenizer: &clikelanglinetokenizer{
 			linecommentstart:      []rune{'#'},
 			stringstarts:          [][]rune{{'"'}, {'\''}, {'b', '"'}, {'f', '"'}},
@@ -387,22 +474,26 @@ func (h clikelangbasichighlighter) highlightline(l *line, prevlineattr *lineattr
 	for _, token := range tokens {
 		for i := token.start; i < token.end+1; i++ {
 			switch token.typ {
-			case tk_unknown, tk_whitespace:
+			case tk_unknown, tk_whitespace, tk_nl:
 				colors[i] = -1
 			case tk_ident:
-				colors[i] = 6
+				colors[i] = h.theme.colorident
 			case tk_keyword:
-				colors[i] = 30
-			case tk_string, tk_multilinestring:
-				colors[i] = 70
+				colors[i] = h.theme.colorkeyword
+			case tk_string:
+				colors[i] = h.theme.colorstring
+			case tk_multilinestring:
+				colors[i] = h.theme.colormultilinestring
 			case tk_number:
-				colors[i] = 96
+				colors[i] = h.theme.colornumber
 			case tk_operator:
-				colors[i] = 25
+				colors[i] = h.theme.coloroperator
 			case tk_symbol:
-				colors[i] = -1
-			case tk_linecomment, tk_blockcomment:
-				colors[i] = 240
+				colors[i] = h.theme.colorsymbol
+			case tk_linecomment:
+				colors[i] = h.theme.colorlinecomment
+			case tk_blockcomment:
+				colors[i] = h.theme.colorblockcomment
 			}
 		}
 	}
@@ -894,7 +985,7 @@ type screen struct {
 	dirty bool
 }
 
-func newscreen(term terminal, x, y, width, height int, file file, changemode func(mode mode)) *screen {
+func newscreen(term terminal, x, y, width, height int, file file, changemode func(mode mode), theme *theme) *screen {
 	s := &screen{
 		term:       &screenterm{term: term, width: width, x: x, y: y},
 		height:     height,
@@ -928,10 +1019,10 @@ func newscreen(term terminal, x, y, width, height int, file file, changemode fun
 	ext := strings.TrimPrefix(filepath.Ext(file.Name()), ".")
 	switch {
 	case slices.Contains(golangexts, ext):
-		s.highlighter = newgolanghighlighter()
+		s.highlighter = newgolanghighlighter(theme)
 
 	case slices.Contains(pythonexts, ext):
-		s.highlighter = newpythonhighlighter()
+		s.highlighter = newpythonhighlighter(theme)
 
 	default:
 		s.highlighter = nophighlighter{}
@@ -1134,8 +1225,6 @@ func (s *screen) highlightchangedlines() {
 
 	slices.Sort(s.changedlines)
 	s.changedlines = slices.Compact(s.changedlines)
-
-	debug(0, "highlightchangedlines: %v\n", s.changedlines)
 
 	for i := s.changedlines[0]; i < len(s.lines); i++ {
 		prevlinestate := &lineattribute{}
@@ -1625,13 +1714,13 @@ type window struct {
 	direction direction // down or right
 }
 
-func newleafwindow(term terminal, x, y, width, height int, file file, modechange func(mode mode)) *window {
+func newleafwindow(term terminal, x, y, width, height int, file file, modechange func(mode mode), theme *theme) *window {
 	return &window{
 		x:      x,
 		y:      y,
 		width:  width,
 		height: height,
-		screen: newscreen(term, x, y, width, height, file, modechange),
+		screen: newscreen(term, x, y, width, height, file, modechange, theme),
 	}
 }
 
@@ -1643,16 +1732,16 @@ func (w *window) isleaf() bool {
 	return len(w.children) == 0
 }
 
-func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file) *window {
+func (w *window) split(term terminal, modechange func(mode mode), direction direction, file file, theme *theme) *window {
 	// when the given directions is the same with parent window, add new window as sibling of w.
 	if w.parent != nil && w.parent.direction == direction {
-		return w.parent.inschildafter(w, term, modechange, file)
+		return w.parent.inschildafter(w, term, modechange, file, theme)
 	}
 
 	// when no parent exists (= w is root) or exists but direction is different,
 	// make the leaf window w to inner window, then add new window as child.
 	w.toinner(direction)
-	return w.inschildafter(w.children[0], term, modechange, file)
+	return w.inschildafter(w.children[0], term, modechange, file, theme)
 }
 
 func (w *window) toinner(direction direction) {
@@ -1666,9 +1755,9 @@ func (w *window) toinner(direction direction) {
 	w.screen = nil
 }
 
-func (w *window) inschildafter(after *window, term terminal, modechange func(mode mode), file file) *window {
+func (w *window) inschildafter(after *window, term terminal, modechange func(mode mode), file file, theme *theme) *window {
 	// insert a child node after $after then do resize.
-	newwin := newleafwindow(term, 0, 0, 0, 0, file, modechange)
+	newwin := newleafwindow(term, 0, 0, 0, 0, file, modechange, theme)
 	newwin.parent = w
 	idx := slices.Index(w.children, after)
 	if idx == -1 {
@@ -1878,6 +1967,7 @@ func (w *window) string(depth int) string {
 
 type editor struct {
 	term          *screenterm
+	theme         *theme
 	rootwin       *window
 	activewin     *window
 	windowchanged bool
@@ -1919,7 +2009,7 @@ func (e *editor) split(filename string, direction direction) {
 		return
 	}
 
-	e.activewin = e.activewin.split(e.term.term, func(mode mode) { e.mode = mode }, direction, file)
+	e.activewin = e.activewin.split(e.term.term, func(mode mode) { e.mode = mode }, direction, file, e.theme)
 	e.windowchanged = true
 }
 
@@ -2071,7 +2161,7 @@ func (e *editor) debug() {
 	debug(2, "%v\n", e)
 }
 
-func start(term terminal, in io.Reader, file file) {
+func start(term terminal, in io.Reader, file file, theme *theme) {
 	fin, err := term.init()
 	if err != nil {
 		fin()
@@ -2094,6 +2184,7 @@ func start(term terminal, in io.Reader, file file) {
 
 	e := &editor{
 		term:    newscreenterm(term, 0, 0, width),
+		theme:   theme,
 		height:  height,
 		width:   width,
 		mode:    normal,
@@ -2102,7 +2193,7 @@ func start(term terminal, in io.Reader, file file) {
 		msg:     newemptyline(),
 	}
 
-	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode })
+	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, func(mode mode) { e.mode = mode }, e.theme)
 	e.activewin = e.rootwin
 	e.render(true)
 
@@ -2242,7 +2333,25 @@ finish:
 }
 
 func main() {
+	var (
+		_theme = flag.String("theme", "doraemon", "theme name, choose from [doraemon, noby (or nobita), sue (or shizuka), sneech (or suneo), big-g (or gian)]")
+	)
 	flag.Parse()
+
+	theme := theme_doraemon
+	switch *_theme {
+	case "doraemon":
+		theme = theme_doraemon
+	case "noby", "nobita":
+		theme = theme_nobita
+	case "sue", "shizuka":
+		theme = theme_shizuka
+	case "sneech", "suneo":
+		theme = theme_suneo
+	case "big-g", "gian":
+		theme = theme_gian
+	}
+
 	args := flag.Args()
 
 	var filename string
@@ -2261,7 +2370,7 @@ func main() {
 		panic(err)
 	}
 
-	start(&unixVT100term{}, os.Stdin, file)
+	start(&unixVT100term{}, os.Stdin, file, theme)
 }
 
 /*
