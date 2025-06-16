@@ -2112,6 +2112,10 @@ func (e *editor) commandline() *line {
 }
 
 func (e *editor) render(first bool) {
+	// to prevent cursor flickering
+	e.term.hidecursor()
+	defer e.term.showcursor()
+
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
@@ -2171,6 +2175,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 
 	defer fin()
 	defer term.refresh()
+	defer term.showcursor()
 
 	term.refresh()
 
@@ -2756,6 +2761,14 @@ func (st *screenterm) putcursor(x, y int) {
 	st.term.putcursor(st.x+x, st.y+y)
 }
 
+func (st *screenterm) hidecursor() {
+	st.term.hidecursor()
+}
+
+func (st *screenterm) showcursor() {
+	st.term.showcursor()
+}
+
 func (st *screenterm) Write(p []byte) (int, error) {
 	return st.term.Write(p)
 }
@@ -2772,6 +2785,8 @@ type terminal interface {
 	refresh()
 	clearline(width int)
 	putcursor(x, y int)
+	hidecursor()
+	showcursor()
 }
 
 type unixVT100term struct{}
@@ -2799,6 +2814,14 @@ func (t *unixVT100term) clearline(width int) {
 
 func (t *unixVT100term) putcursor(x, y int) {
 	fmt.Fprint(t, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
+}
+
+func (t *unixVT100term) hidecursor() {
+	fmt.Fprint(t, "\x1b[?25l")
+}
+
+func (t *unixVT100term) showcursor() {
+	fmt.Fprint(t, "\x1b[?25h")
 }
 
 func (t *unixVT100term) Write(p []byte) (int, error) {
