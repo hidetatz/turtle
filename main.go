@@ -1183,7 +1183,7 @@ func (s *screen) render(first bool) {
 		for i := range s.height - 1 {
 			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
-				fmt.Fprint(s.term, displine(s.yoffset+i))
+				s.term.write([]byte(displine(s.yoffset + i)))
 			}
 		}
 	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 {
@@ -1200,16 +1200,17 @@ func (s *screen) render(first bool) {
 			s.term.clearline(l - s.yoffset)
 
 			if l <= len(s.lines)-1 {
-				fmt.Fprint(s.term, displine(l))
+				s.term.write([]byte(displine(l)))
 			}
 		}
 	}
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	fmt.Fprint(s.term, s.statusline().display(0, s.width-(s.linenumberwidth+1), []int{}))
+	s.term.write([]byte(s.statusline().display(0, s.width-(s.linenumberwidth+1), []int{})))
 
 	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
+	s.term.flush()
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
 	s.changedlines = []int{}
 	s.highlightupdatedlines = []int{}
@@ -1853,12 +1854,12 @@ func (w *window) render(term *screenterm, first bool) {
 			if w.direction == right {
 				for j := range child.height {
 					term.putcursor(child.x+child.width, child.y+j)
-					fmt.Fprintf(term, "|")
+					term.write([]byte("|"))
 				}
 			} else {
 				for j := range child.width {
 					term.putcursor(child.x+j, child.y+child.height)
-					fmt.Fprintf(term, "-")
+					term.write([]byte("-"))
 				}
 
 			}
@@ -2114,14 +2115,14 @@ func (e *editor) commandline() *line {
 func (e *editor) render(first bool) {
 	// to prevent cursor flickering
 	e.term.hidecursor()
-	defer e.term.showcursor()
+	e.term.flush()
 
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
-		fmt.Fprint(e.term, e.msg.display(0, e.width, []int{}))
+		e.term.write([]byte(e.msg.display(0, e.width, []int{})))
 	} else {
-		fmt.Fprint(e.term, e.commandline().display(0, e.width, []int{}))
+		e.term.write([]byte(e.commandline().display(0, e.width, []int{})))
 	}
 
 	if e.windowchanged {
@@ -2134,6 +2135,9 @@ func (e *editor) render(first bool) {
 	if e.mode == command {
 		e.term.putcursor(e.cmdx+1, e.height-1)
 	}
+
+	e.term.showcursor()
+	e.term.flush()
 
 	e.windowchanged = false
 }
@@ -2173,9 +2177,13 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 		panic(err)
 	}
 
-	defer fin()
-	defer term.refresh()
-	defer term.showcursor()
+	defer func() {
+		fin()
+		term.refresh()
+		term.putcursor(0, 0)
+		term.showcursor()
+		term.flush()
+	}()
 
 	term.refresh()
 
@@ -2336,9 +2344,6 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 	}
 
 finish:
-	e.term.refresh()
-	fmt.Fprintf(os.Stdout, "\n")
-	e.term.putcursor(0, 0)
 }
 
 func main() {
@@ -2719,8 +2724,6 @@ func debug(level int, format string, a ...any) (int, error) {
  */
 
 type screenterm struct {
-	io.Writer
-
 	term terminal
 
 	// screen position in the terminal screen
@@ -2751,6 +2754,14 @@ func (st *screenterm) refresh() {
 	st.term.refresh()
 }
 
+func (st *screenterm) hidecursor() {
+	st.term.hidecursor()
+}
+
+func (st *screenterm) showcursor() {
+	st.term.showcursor()
+}
+
 func (st *screenterm) clearline(y int) {
 	st.putcursor(0, y)
 	st.term.clearline(st.width)
@@ -2761,16 +2772,12 @@ func (st *screenterm) putcursor(x, y int) {
 	st.term.putcursor(st.x+x, st.y+y)
 }
 
-func (st *screenterm) hidecursor() {
-	st.term.hidecursor()
+func (st *screenterm) write(b []byte) {
+	st.term.write(b)
 }
 
-func (st *screenterm) showcursor() {
-	st.term.showcursor()
-}
-
-func (st *screenterm) Write(p []byte) (int, error) {
-	return st.term.Write(p)
+func (st *screenterm) flush() {
+	st.term.flush()
 }
 
 /*
@@ -2778,20 +2785,29 @@ func (st *screenterm) Write(p []byte) (int, error) {
  */
 
 type terminal interface {
-	io.Writer
-
 	init() (func(), error)
 	windowsize() (int, int, error)
+
+	// do write buffering
 	refresh()
-	clearline(width int)
-	putcursor(x, y int)
 	hidecursor()
 	showcursor()
+	clearline(width int)
+	putcursor(x, y int)
+	write(b []byte)
+
+	// flushes the buffer
+	flush()
 }
 
-type unixVT100term struct{}
+type unixVT100term struct {
+	w    io.Writer
+	buff []byte // not using bufio.Writer as we want to control when the buffer is flushed
+}
 
 func (t *unixVT100term) init() (func(), error) {
+	t.w = os.Stdout
+
 	oldstate, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return func() {}, err
@@ -2805,27 +2821,32 @@ func (t *unixVT100term) windowsize() (int, int, error) {
 }
 
 func (t *unixVT100term) refresh() {
-	fmt.Fprint(t, "\x1b[2J")
-}
-
-func (t *unixVT100term) clearline(width int) {
-	t.Write([]byte(strings.Repeat(" ", width)))
-}
-
-func (t *unixVT100term) putcursor(x, y int) {
-	fmt.Fprint(t, fmt.Sprintf("\x1b[%v;%vH", y+1, x+1))
+	t.buff = fmt.Appendf(t.buff, "\x1b[2J")
 }
 
 func (t *unixVT100term) hidecursor() {
-	fmt.Fprint(t, "\x1b[?25l")
+	t.buff = fmt.Appendf(t.buff, "\x1b[?25l")
 }
 
 func (t *unixVT100term) showcursor() {
-	fmt.Fprint(t, "\x1b[?25h")
+	t.buff = fmt.Appendf(t.buff, "\x1b[?25h")
 }
 
-func (t *unixVT100term) Write(p []byte) (int, error) {
-	return os.Stdout.Write(p)
+func (t *unixVT100term) clearline(width int) {
+	t.buff = fmt.Appendf(t.buff, "%v", strings.Repeat(" ", width))
+}
+
+func (t *unixVT100term) putcursor(x, y int) {
+	t.buff = fmt.Appendf(t.buff, "\x1b[%v;%vH", y+1, x+1)
+}
+
+func (t *unixVT100term) write(b []byte) {
+	t.buff = slices.Concat(t.buff, b)
+}
+
+func (t *unixVT100term) flush() {
+	t.w.Write(t.buff)
+	t.buff = []byte{}
 }
 
 /*
