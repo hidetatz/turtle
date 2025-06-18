@@ -256,7 +256,7 @@ func (l *line) substring(start, end int) string {
 	return s
 }
 
-func (l *line) cutandcolorize(from, width int, colors []int) string {
+func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) string {
 	colorize := func(s string, color int) string {
 		if color == -1 {
 			return s
@@ -264,9 +264,14 @@ func (l *line) cutandcolorize(from, width int, colors []int) string {
 		return fmt.Sprintf("\x1b[38;5;%dm%v\x1b[0m", int(color), s)
 	}
 
+	invert := func(s string) string {
+		return fmt.Sprintf("\x1b[7m%v\x1b[27m", s)
+	}
+
 	var runes []rune
 	var _colors []int
 	var widths []int
+	var _inverts []int
 
 	for i := range l.buffer {
 		switch {
@@ -277,8 +282,19 @@ func (l *line) cutandcolorize(from, width int, colors []int) string {
 			}
 			widths = append(widths, 1, 1, 1, 1)
 
+			if slices.Contains(inverts, i) {
+				length := len(runes)
+				_inverts = append(_inverts, length-4, length-3, length-2, length-1)
+			}
+
 		case l.buffer[i].nl:
-			// do nothing
+			runes = append(runes, ' ')
+			widths = append(widths, 1)
+			_colors = append(_colors, -1)
+			if slices.Contains(inverts, i) {
+				length := len(runes)
+				_inverts = append(_inverts, length-1)
+			}
 
 		default:
 			runes = append(runes, l.buffer[i].r)
@@ -286,6 +302,11 @@ func (l *line) cutandcolorize(from, width int, colors []int) string {
 				_colors = append(_colors, colors[i])
 			}
 			widths = append(widths, l.buffer[i].width)
+
+			if slices.Contains(inverts, i) {
+				length := len(runes)
+				_inverts = append(_inverts, length-1)
+			}
 		}
 	}
 
@@ -303,6 +324,8 @@ func (l *line) cutandcolorize(from, width int, colors []int) string {
 
 		if len(colors) == 0 {
 			str += string(runes[i])
+		} else if slices.Contains(_inverts, i) {
+			str += invert(string(runes[i]))
 		} else {
 			str += colorize(string(runes[i]), _colors[i])
 		}
@@ -1173,12 +1196,14 @@ func (s *screen) render(force bool) {
 
 	/* update texts */
 
+	charidx := s.curline().charidx(x, s.xoffset)
+
 	if scrolled || s.scrolled || force {
 		// update all lines
 		for i := range s.height - 1 {
 			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
-				s.term.write(s.displayline(s.yoffset + i))
+				s.term.write(s.displayline(s.yoffset+i, charidx))
 			}
 		}
 	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 {
@@ -1195,15 +1220,14 @@ func (s *screen) render(force bool) {
 			s.term.clearline(l - s.yoffset)
 
 			if l <= len(s.lines)-1 {
-				s.term.write(s.displayline(l))
+				s.term.write(s.displayline(l, charidx))
 			}
 		}
 	}
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	s.term.write([]byte(s.statusline().cutandcolorize(0, s.width-(s.linenumberwidth+1), []int{})))
-	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
+	s.term.write([]byte(s.statusline().cutandcolorize(0, s.width-(s.linenumberwidth+1), []int{}, []int{})))
 	s.term.flush()
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
 	s.changedlines = []int{}
@@ -1211,10 +1235,14 @@ func (s *screen) render(force bool) {
 	s.scrolled = false
 }
 
-func (s *screen) displayline(y int) []byte {
+func (s *screen) displayline(y int, cursorx int) []byte {
 	line := s.lines[y]
 	linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
-	return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors))
+	cursor := []int{}
+	if s.y == y {
+		cursor = []int{cursorx}
+	}
+	return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors, cursor))
 }
 
 func (s *screen) highlightchangedlines() {
@@ -2114,15 +2142,20 @@ func (e *editor) commandline() *line {
 
 func (e *editor) render(first bool) {
 	// to prevent cursor flickering
-	e.term.hidecursor()
 	e.term.flush()
 
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
-		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{})))
+		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{}, []int{})))
 	} else {
-		e.term.write([]byte(e.commandline().cutandcolorize(0, e.width, []int{})))
+		cursor := []int{}
+		if e.mode == command {
+			cursor = []int{e.cmdx + 1}
+			// e.term.putcursor(e.cmdx+1, e.height-1)
+		}
+
+		e.term.write([]byte(e.commandline().cutandcolorize(0, e.width, []int{}, cursor)))
 	}
 
 	if e.windowchanged {
@@ -2132,11 +2165,6 @@ func (e *editor) render(first bool) {
 		e.activewin.render(e.term, first)
 	}
 
-	if e.mode == command {
-		e.term.putcursor(e.cmdx+1, e.height-1)
-	}
-
-	e.term.showcursor()
 	e.term.flush()
 
 	e.windowchanged = false
@@ -2186,6 +2214,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 	}()
 
 	term.refresh()
+	term.hidecursor()
 
 	/*
 	 * Prepare editor state
@@ -2339,7 +2368,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 			panic("unknown mode")
 		}
 
-		e.render(false)
+		e.render(true)
 		e.debug()
 	}
 
