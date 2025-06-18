@@ -256,7 +256,7 @@ func (l *line) substring(start, end int) string {
 	return s
 }
 
-func (l *line) display(from, width int, colors []int) string {
+func (l *line) cutandcolorize(from, width int, colors []int) string {
 	colorize := func(s string, color int) string {
 		if color == -1 {
 			return s
@@ -1069,7 +1069,7 @@ func (s *screen) curline() *line {
 	return s.lines[s.y]
 }
 
-func (s *screen) render(first bool) {
+func (s *screen) render(force bool) {
 	// when the x is too right, set x to the line tail.
 	// This must not change s.x because s.x should be kept when moving to another long line.
 	x := min(s.x, s.curline().width()-1)
@@ -1171,19 +1171,14 @@ func (s *screen) render(first bool) {
 		scrolled = true
 	}
 
-	displine := func(y int) string {
-		line := s.lines[y]
-		linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
-		return fmt.Sprintf("%v %v", linenumber, line.display(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors))
-	}
-
 	/* update texts */
-	if scrolled || s.scrolled || first {
+
+	if scrolled || s.scrolled || force {
 		// update all lines
 		for i := range s.height - 1 {
 			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
-				s.term.write([]byte(displine(s.yoffset + i)))
+				s.term.write(s.displayline(s.yoffset + i))
 			}
 		}
 	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 {
@@ -1200,21 +1195,26 @@ func (s *screen) render(first bool) {
 			s.term.clearline(l - s.yoffset)
 
 			if l <= len(s.lines)-1 {
-				s.term.write([]byte(displine(l)))
+				s.term.write(s.displayline(l))
 			}
 		}
 	}
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	s.term.write([]byte(s.statusline().display(0, s.width-(s.linenumberwidth+1), []int{})))
-
+	s.term.write([]byte(s.statusline().cutandcolorize(0, s.width-(s.linenumberwidth+1), []int{})))
 	s.term.putcursor(x-s.xoffset+s.linenumberwidth+1, s.y-s.yoffset)
 	s.term.flush()
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
 	s.changedlines = []int{}
 	s.highlightupdatedlines = []int{}
 	s.scrolled = false
+}
+
+func (s *screen) displayline(y int) []byte {
+	line := s.lines[y]
+	linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
+	return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors))
 }
 
 func (s *screen) highlightchangedlines() {
@@ -2120,9 +2120,9 @@ func (e *editor) render(first bool) {
 	/* update command line */
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
-		e.term.write([]byte(e.msg.display(0, e.width, []int{})))
+		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{})))
 	} else {
-		e.term.write([]byte(e.commandline().display(0, e.width, []int{})))
+		e.term.write([]byte(e.commandline().cutandcolorize(0, e.width, []int{})))
 	}
 
 	if e.windowchanged {
