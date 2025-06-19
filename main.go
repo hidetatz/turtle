@@ -1001,6 +1001,8 @@ type screen struct {
 	yoffset int
 
 	scrolled              bool
+	selectedlines         []int
+	unselectedlines       []int
 	changedlines          []int
 	highlightupdatedlines []int
 
@@ -1206,9 +1208,9 @@ func (s *screen) render(force bool) {
 				s.term.write(s.displayline(s.yoffset+i, charidx))
 			}
 		}
-	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 {
+	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 || len(s.selectedlines) != 0 || len(s.unselectedlines) != 0 {
 		// udpate only changed lines
-		lines := slices.Concat(s.changedlines, s.highlightupdatedlines)
+		lines := slices.Concat(s.changedlines, s.highlightupdatedlines, s.selectedlines, s.unselectedlines)
 		slices.Sort(lines)
 		lines = slices.Compact(lines)
 		for _, l := range lines {
@@ -1232,6 +1234,8 @@ func (s *screen) render(force bool) {
 	s.actualx = x - s.xoffset + s.linenumberwidth + 1
 	s.changedlines = []int{}
 	s.highlightupdatedlines = []int{}
+	s.selectedlines = []int{}
+	s.unselectedlines = []int{}
 	s.scrolled = false
 }
 
@@ -1313,14 +1317,18 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 			s.movecursor(right, num)
 
 		case _ctrl_u:
+			s.unselectedlines = append(s.unselectedlines, s.y)
 			move := (s.height - 1) / 2
 			s.y = max(0, s.y-move)
+			s.selectedlines = append(s.selectedlines, s.y)
 			s.yoffset = max(0, s.yoffset-move)
 			s.scrolled = true
 
 		case _ctrl_d:
+			s.unselectedlines = append(s.unselectedlines, s.y)
 			move := (s.height - 1) / 2
 			s.y = min(len(s.lines)-1, s.y+move)
+			s.selectedlines = append(s.selectedlines, s.y)
 			s.yoffset = s.yoffset + move
 			s.scrolled = true
 
@@ -1330,6 +1338,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 				debug(0, "debug line (%v): '%v', attr: %v\n", s.y, s.curline(), s.lineattrs[s.y])
 
 			case 'd':
+				s.unselectedlines = append(s.unselectedlines, s.y)
 				switch {
 				case s.xidx() == s.curline().length()-1:
 					if s.y+1 < len(s.lines) {
@@ -1341,17 +1350,22 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 					s.delchar()
 					s.alignx()
 				}
+				s.selectedlines = append(s.selectedlines, s.y)
 
 			case 'o':
+				s.unselectedlines = append(s.unselectedlines, s.y)
 				s.insline(down)
 				s.movecursor(down, 1)
 				s.x = 0
 				newmode = insert
+				s.selectedlines = append(s.selectedlines, s.y)
 
 			case 'O':
+				s.unselectedlines = append(s.unselectedlines, s.y)
 				s.insline(up)
 				s.x = 0
 				newmode = insert
+				s.selectedlines = append(s.selectedlines, s.y)
 
 			case 'G':
 				s.gotoline(num)
@@ -1445,6 +1459,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 			newmode = normal
 
 		case _cr:
+			s.unselectedlines = append(s.unselectedlines, s.y)
 			curline := s.curline().copy()
 			nextline := s.curline().copy()
 			curidx := s.xidx()
@@ -1456,6 +1471,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 			s.movecursor(down, 1)
 			s.inscharsat(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
 			s.x = 0
+			s.selectedlines = append(s.selectedlines, s.y)
 
 		case _bs:
 			switch s.xidx() {
@@ -1476,6 +1492,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 				// the cursor points nowhere after deleting the rightmost char.
 				s.movecursor(left, 1)
 				s.delcharat(s.xidx() - 1)
+				s.selectedlines = append(s.selectedlines, s.y)
 			}
 
 		case _tab:
@@ -1528,6 +1545,7 @@ func (d direction) String() string {
 }
 
 func (s *screen) movecursor(direction direction, cnt int) {
+	s.unselectedlines = append(s.unselectedlines, s.y)
 	switch direction {
 	case up:
 		s.y = max(s.y-cnt, 0)
@@ -1546,6 +1564,7 @@ func (s *screen) movecursor(direction direction, cnt int) {
 	default:
 		panic("invalid direction is passed")
 	}
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) movetonextch(c *character) {
@@ -1553,6 +1572,7 @@ func (s *screen) movetonextch(c *character) {
 	for i := s.xidx() + 1; i < line.length(); i++ {
 		if line.buffer[i].equal(c) {
 			s.x = line.widthto(i)
+			s.selectedlines = append(s.selectedlines, s.y)
 			break
 		}
 	}
@@ -1564,6 +1584,7 @@ func (s *screen) movetoprevch(c *character) {
 	for i := s.xidx() - 1; 0 <= i; i-- {
 		if line.buffer[i].equal(c) {
 			s.x = line.widthto(i)
+			s.selectedlines = append(s.selectedlines, s.y)
 			break
 		}
 	}
@@ -1571,15 +1592,20 @@ func (s *screen) movetoprevch(c *character) {
 }
 
 func (s *screen) gototopleft() {
+	s.unselectedlines = append(s.unselectedlines, s.y)
 	s.x, s.y = 0, 0
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) gotobottomleft() {
+	s.unselectedlines = append(s.unselectedlines, s.y)
 	s.x, s.y = 0, len(s.lines)-1
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) gotolinebottom() {
 	s.x = s.curline().width() - 1
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) gotolineheadch() {
@@ -1592,10 +1618,12 @@ func (s *screen) gotolineheadch() {
 		x += curline.buffer[i].width
 	}
 	s.x = x
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) gotolinehead() {
 	s.x = 0
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) gotoline(line int) {
@@ -1603,7 +1631,9 @@ func (s *screen) gotoline(line int) {
 		line = len(s.lines)
 	}
 
+	s.unselectedlines = append(s.unselectedlines, s.y)
 	s.y = line - 1
+	s.selectedlines = append(s.selectedlines, s.y)
 }
 
 func (s *screen) insline(direction direction) {
@@ -2368,7 +2398,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 			panic("unknown mode")
 		}
 
-		e.render(true)
+		e.render(false)
 		e.debug()
 	}
 
