@@ -181,10 +181,6 @@ func (l *line) width() int {
 	return l.widthto(l.length())
 }
 
-func (l *line) rightedge() int {
-	return l.widthto(l.length() - 1)
-}
-
 func (l *line) replacech(ch *character, at int) {
 	l.buffer[at] = ch
 }
@@ -322,13 +318,17 @@ func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) stri
 			continue
 		}
 
+		if slices.Contains(_inverts, i) {
+			str += invert(string(runes[i]))
+			continue
+		}
+
 		if len(colors) == 0 {
 			str += string(runes[i])
-		} else if slices.Contains(_inverts, i) {
-			str += invert(string(runes[i]))
-		} else {
-			str += colorize(string(runes[i]), _colors[i])
+			continue
 		}
+
+		str += colorize(string(runes[i]), _colors[i])
 	}
 
 	return str
@@ -980,6 +980,11 @@ func (s *lineattribute) String() string {
 	}
 }
 
+type cursor struct {
+	x, y    int
+	actualx int
+}
+
 type screen struct {
 	term            *screenterm
 	highlighter     highlighter
@@ -992,18 +997,13 @@ type screen struct {
 
 	yankedch *character
 
-	// current desired cursor position. might be different with the actual position.
-	x int
-	y int
+	cursors []*cursor
 
-	actualx int
 	xoffset int
 	yoffset int
 
 	scrolled              bool
-	selectedlines         []int
-	unselectedlines       []int
-	changedlines          []int
+	linestoberendered     []int
 	highlightupdatedlines []int
 
 	dirty bool
@@ -1015,8 +1015,7 @@ func newscreen(term terminal, x, y, width, height int, file file, theme *theme) 
 		height:  height,
 		width:   width,
 		file:    file,
-		x:       0,
-		y:       0,
+		cursors: []*cursor{{0, 0, 0}},
 		xoffset: 0,
 		yoffset: 0,
 		lines:   []*line{},
@@ -1090,14 +1089,16 @@ func (s *screen) statusline() *line {
 	return newline(fmt.Sprintf(" %v", s.file.Name()))
 }
 
-func (s *screen) curline() *line {
-	return s.lines[s.y]
+func (s *screen) curline(c *cursor) *line {
+	return s.lines[c.y]
 }
 
 func (s *screen) render(force bool) {
+	firstcursor := s.cursors[0]
+
 	// when the x is too right, set x to the line tail.
 	// This must not change s.x because s.x should be kept when moving to another long line.
-	x := min(s.x, s.curline().width()-1)
+	x := min(firstcursor.x, s.curline(firstcursor).width()-1)
 
 	/* scroll x */
 
@@ -1116,7 +1117,7 @@ func (s *screen) render(force bool) {
 
 		// too right, scroll right
 		if s.xoffset+s.width-(s.linenumberwidth+1)-1 < x+xpad {
-			if s.curline().width()-1 < x+xpad && x <= s.xoffset+s.width-(s.linenumberwidth+1)-1 {
+			if s.curline(firstcursor).width()-1 < x+xpad && x <= s.xoffset+s.width-(s.linenumberwidth+1)-1 {
 				// too right but no enough space right
 				return 0
 			}
@@ -1144,8 +1145,8 @@ func (s *screen) render(force bool) {
 
 	ypad := 4
 	yok := func() direction {
-		padup := s.y - s.yoffset
-		paddown := (s.yoffset + s.height - 2) - s.y
+		padup := firstcursor.y - s.yoffset
+		paddown := (s.yoffset + s.height - 2) - firstcursor.y
 
 		// cursor has up and down padding, it's ok
 		if padup >= ypad && paddown >= ypad {
@@ -1196,21 +1197,47 @@ func (s *screen) render(force bool) {
 		scrolled = true
 	}
 
+	type _cursor struct {
+		c       *cursor
+		charidx int
+	}
+
+	_cursors := make([]*_cursor, len(s.cursors))
+
+	for i := range s.cursors {
+		x := min(s.cursors[i].x, s.curline(s.cursors[i]).width()-1)
+		s.cursors[i].actualx = x - s.xoffset + s.linenumberwidth + 1
+		_cursors[i] = &_cursor{c: s.cursors[i], charidx: s.curline(s.cursors[i]).charidx(x, s.xoffset)}
+	}
+
 	/* update texts */
 
-	charidx := s.curline().charidx(x, s.xoffset)
+	displayline := func(y int) []byte {
+		line := s.lines[y]
+		linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
+
+		cursor := []int{}
+		for _, c := range _cursors {
+			if c.c.y != y {
+				continue
+			}
+
+			cursor = append(cursor, c.charidx)
+		}
+		return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors, cursor))
+	}
 
 	if scrolled || s.scrolled || force {
 		// update all lines
 		for i := range s.height - 1 {
 			s.term.clearline(i)
 			if s.yoffset+i < len(s.lines) {
-				s.term.write(s.displayline(s.yoffset+i, charidx))
+				s.term.write(displayline(s.yoffset + i))
 			}
 		}
-	} else if len(s.changedlines) != 0 || len(s.highlightupdatedlines) != 0 || len(s.selectedlines) != 0 || len(s.unselectedlines) != 0 {
+	} else if len(s.linestoberendered) != 0 || len(s.highlightupdatedlines) != 0 {
 		// udpate only changed lines
-		lines := slices.Concat(s.changedlines, s.highlightupdatedlines, s.selectedlines, s.unselectedlines)
+		lines := slices.Concat(s.linestoberendered, s.highlightupdatedlines)
 		slices.Sort(lines)
 		lines = slices.Compact(lines)
 		for _, l := range lines {
@@ -1222,7 +1249,7 @@ func (s *screen) render(force bool) {
 			s.term.clearline(l - s.yoffset)
 
 			if l <= len(s.lines)-1 {
-				s.term.write(s.displayline(l, charidx))
+				s.term.write(displayline(l))
 			}
 		}
 	}
@@ -1231,33 +1258,20 @@ func (s *screen) render(force bool) {
 	s.term.clearline(s.height - 1)
 	s.term.write([]byte(s.statusline().cutandcolorize(0, s.width-(s.linenumberwidth+1), []int{}, []int{})))
 	s.term.flush()
-	s.actualx = x - s.xoffset + s.linenumberwidth + 1
-	s.changedlines = []int{}
+	s.linestoberendered = []int{}
 	s.highlightupdatedlines = []int{}
-	s.selectedlines = []int{}
-	s.unselectedlines = []int{}
 	s.scrolled = false
 }
 
-func (s *screen) displayline(y int, cursorx int) []byte {
-	line := s.lines[y]
-	linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
-	cursor := []int{}
-	if s.y == y {
-		cursor = []int{cursorx}
-	}
-	return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors, cursor))
-}
-
 func (s *screen) highlightchangedlines() {
-	if len(s.changedlines) == 0 {
+	if len(s.linestoberendered) == 0 {
 		return
 	}
 
-	slices.Sort(s.changedlines)
-	s.changedlines = slices.Compact(s.changedlines)
+	slices.Sort(s.linestoberendered)
+	s.linestoberendered = slices.Compact(s.linestoberendered)
 
-	for i := s.changedlines[0]; i < len(s.lines); i++ {
+	for i := s.linestoberendered[0]; i < len(s.lines); i++ {
 		prevlinestate := &lineattribute{}
 		if i != 0 {
 			prevlinestate = s.lineattrs[i-1]
@@ -1268,7 +1282,7 @@ func (s *screen) highlightchangedlines() {
 		s.highlightupdatedlines = append(s.highlightupdatedlines, i)
 
 		// when the line state is not changed, the rest lines must not be changed also, so break the loop
-		if s.changedlines[len(s.changedlines)-1] < i && curlineattr.inblockcomment == newlineattr.inblockcomment && curlineattr.inmultilinestr == newlineattr.inmultilinestr {
+		if s.linestoberendered[len(s.linestoberendered)-1] < i && curlineattr.inblockcomment == newlineattr.inblockcomment && curlineattr.inmultilinestr == newlineattr.inmultilinestr {
 			s.lineattrs[i] = newlineattr
 			break
 		}
@@ -1277,10 +1291,37 @@ func (s *screen) highlightchangedlines() {
 	}
 }
 
+func (s *screen) cleanupcursors() {
+	slices.SortFunc(s.cursors, func(c1, c2 *cursor) int {
+		if c1.x == c2.x && c1.y == c2.y {
+			return 0
+		}
+
+		if c1.y != c2.y {
+			if c1.y > c2.y {
+				return 1
+			} else {
+				return -1
+			}
+		}
+
+		if c1.x > c2.x {
+			return 1
+		}
+
+		return -1
+	})
+	s.cursors = slices.CompactFunc(s.cursors, func(c1, c2 *cursor) bool {
+		return c1.x == c2.x && c2.y == c2.y
+	})
+}
+
 func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
+	numinput := false
 	num := 1
 	isnum, n := buff.isnumber()
 	if curmode == normal && isnum {
+		numinput = true
 		num = n
 		for {
 			next := reader.read()
@@ -1305,70 +1346,43 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 	case normal:
 		switch buff.special {
 		case _left:
-			s.movecursor(left, num)
+			s.movecursors(left, num)
 
 		case _down:
-			s.movecursor(down, num)
+			s.movecursors(down, num)
 
 		case _up:
-			s.movecursor(up, num)
+			s.movecursors(up, num)
 
 		case _right:
-			s.movecursor(right, num)
+			s.movecursors(right, num)
 
 		case _ctrl_u:
-			s.unselectedlines = append(s.unselectedlines, s.y)
-			move := (s.height - 1) / 2
-			s.y = max(0, s.y-move)
-			s.selectedlines = append(s.selectedlines, s.y)
-			s.yoffset = max(0, s.yoffset-move)
-			s.scrolled = true
+			s.scrollhalf(up)
 
 		case _ctrl_d:
-			s.unselectedlines = append(s.unselectedlines, s.y)
-			move := (s.height - 1) / 2
-			s.y = min(len(s.lines)-1, s.y+move)
-			s.selectedlines = append(s.selectedlines, s.y)
-			s.yoffset = s.yoffset + move
-			s.scrolled = true
+			s.scrollhalf(down)
 
 		case _not_special_key:
 			switch buff.r {
-			case '\\':
-				debug(0, "debug line (%v): '%v', attr: %v\n", s.y, s.curline(), s.lineattrs[s.y])
+			// case '\\':
+			// 	debug(0, "debug line (%v): '%v', attr: %v\n", s.y, s.curline(), s.lineattrs[s.y])
 
 			case 'd':
-				s.unselectedlines = append(s.unselectedlines, s.y)
-				switch {
-				case s.xidx() == s.curline().length()-1:
-					if s.y+1 < len(s.lines) {
-						// if x is at last, it's removing nl so concat current and next line.
-						s.joinlines(s.y, s.y+1)
-					}
-
-				default:
-					s.delchar()
-					s.alignx()
-				}
-				s.selectedlines = append(s.selectedlines, s.y)
+				s.deletecursorchar()
 
 			case 'o':
-				s.unselectedlines = append(s.unselectedlines, s.y)
-				s.insline(down)
-				s.movecursor(down, 1)
-				s.x = 0
+				s.insertlinefromcursors(down)
 				newmode = insert
-				s.selectedlines = append(s.selectedlines, s.y)
 
 			case 'O':
-				s.unselectedlines = append(s.unselectedlines, s.y)
-				s.insline(up)
-				s.x = 0
+				s.insertlinefromcursors(up)
 				newmode = insert
-				s.selectedlines = append(s.selectedlines, s.y)
 
 			case 'G':
-				s.gotoline(num)
+				if numinput {
+					s.movecursorstoline(num)
+				}
 
 			/*
 			 * goto mode
@@ -1377,21 +1391,19 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 				input2 := reader.read()
 				switch input2.r {
 				case 'g':
-					s.gototopleft()
+					s.movecursorstotopleft()
 
 				case 'e':
-					s.gotobottomleft()
+					s.movecursorstobottomleft()
 
 				case 'l':
-					s.gotolinebottom()
+					s.movecursorstolinebottom()
 
 				case 's':
-					// move to (first non space character index on curren line, currentline)
-					s.gotolineheadch()
+					s.movecursorstononspacelinehead()
 
 				case 'h':
-					// move to (0, currentline)
-					s.gotolinehead()
+					s.movecursorstolinehead()
 
 				default:
 					// do nothing
@@ -1400,42 +1412,32 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 			case 'f':
 				input2 := reader.read()
 				if input2.special == _not_special_key {
-					s.movetonextch(newcharacter(input2.r))
+					s.movecursorstonextch(newcharacter(input2.r))
 				}
 
 			case 'F':
 				input2 := reader.read()
 				if input2.special == _not_special_key {
-					s.movetoprevch(newcharacter(input2.r))
+					s.movecursorstoprevch(newcharacter(input2.r))
 				}
 
 			case 'r':
 				input2 := reader.read()
 				if input2.special == _not_special_key {
-					s.replacech(newcharacter(input2.r))
-				}
-
-			case 'y':
-				s.yankch()
-
-			case 'p':
-				if s.yankedch != nil {
-					s.alignx()
-					s.inschars([]*character{s.yankedch})
-					s.movecursor(right, 1)
+					s.replacecursorchar(newcharacter(input2.r))
 				}
 
 			case 'h':
-				s.movecursor(left, num)
+				s.movecursors(left, num)
 
 			case 'j':
-				s.movecursor(down, num)
+				s.movecursors(down, num)
 
 			case 'k':
-				s.movecursor(up, num)
+				s.movecursors(up, num)
 
 			case 'l':
-				s.movecursor(right, num)
+				s.movecursors(right, num)
 
 			}
 
@@ -1444,66 +1446,31 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 	case insert:
 		switch buff.special {
 		case _left:
-			s.movecursor(left, 1)
+			s.movecursors(left, 1)
 
 		case _down:
-			s.movecursor(down, 1)
+			s.movecursors(down, 1)
 
 		case _up:
-			s.movecursor(up, 1)
+			s.movecursors(up, 1)
 
 		case _right:
-			s.movecursor(right, 1)
+			s.movecursors(right, 1)
 
 		case _esc:
 			newmode = normal
 
 		case _cr:
-			s.unselectedlines = append(s.unselectedlines, s.y)
-			curline := s.curline().copy()
-			nextline := s.curline().copy()
-			curidx := s.xidx()
-
-			s.clearline()
-			s.inscharsat(curline.buffer[:curidx], 0)
-
-			s.insline(down)
-			s.movecursor(down, 1)
-			s.inscharsat(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
-			s.x = 0
-			s.selectedlines = append(s.selectedlines, s.y)
+			s.splitcursorsline()
 
 		case _bs:
-			switch s.xidx() {
-			case 0:
-				if s.y != 0 {
-					// join current and above line
-					// next x is right edge on the above line
-					nextx := s.lines[s.y-1].rightedge()
-					s.joinlines(s.y-1, s.y)
-					s.movecursor(up, 1)
-					s.x = nextx
-				}
-
-			default:
-				// just delete the char
-
-				// move cursor before deleting char to prevent
-				// the cursor points nowhere after deleting the rightmost char.
-				s.movecursor(left, 1)
-				s.delcharat(s.xidx() - 1)
-				s.selectedlines = append(s.selectedlines, s.y)
-			}
+			s.deletecursorprevchar()
 
 		case _tab:
-			s.alignx()
-			s.inschars([]*character{newcharacter('\t')})
-			s.movecursor(right, 1)
+			s.insertcharsatcursors([]*character{newcharacter('\t')})
 
 		case _not_special_key:
-			s.alignx()
-			s.inschars([]*character{newcharacter(buff.r)})
-			s.movecursor(right, 1)
+			s.insertcharsatcursors([]*character{newcharacter(buff.r)})
 		}
 
 	default:
@@ -1511,11 +1478,12 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 	}
 
 	s.highlightchangedlines()
+	s.cleanupcursors()
 	return newmode
 }
 
 func (s *screen) String() string {
-	return fmt.Sprintf("{file: %v, term: %v, w: %v, h: %v, x: %v, y: %v, xoffset: %v, yoffset: %v}", s.file.Name(), s.term, s.width, s.height, s.x, s.y, s.xoffset, s.yoffset)
+	return fmt.Sprintf("{file: %v, term: %v, w: %v, h: %v, xoffset: %v, yoffset: %v}", s.file.Name(), s.term, s.width, s.height, s.xoffset, s.yoffset)
 }
 
 type direction int
@@ -1544,168 +1512,261 @@ func (d direction) String() string {
 	}
 }
 
-func (s *screen) movecursor(direction direction, cnt int) {
-	s.unselectedlines = append(s.unselectedlines, s.y)
+/* scroll */
+
+func (s *screen) scrollhalf(direction direction) {
+	s.scrolled = true
+	move := (s.height - 1) / 2
 	switch direction {
 	case up:
-		s.y = max(s.y-cnt, 0)
+		s.yoffset = max(0, s.yoffset-move)
+		s.movecursorsfunc(func(c *cursor) (int, int) {
+			return c.x, max(0, c.y-move)
+		})
 
 	case down:
-		s.y = min(s.y+cnt, len(s.lines)-1)
+		s.yoffset = min(len(s.lines)-1, s.yoffset+move)
+		s.movecursorsfunc(func(c *cursor) (int, int) {
+			return c.x, min(len(s.lines)-1, c.y+move)
+		})
+	default:
+		panic("invalid direction is passed")
+	}
+}
+
+/* cursor movement */
+
+func (s *screen) movecursorsfunc(f func(c *cursor) (int, int)) {
+	for i := range s.cursors {
+		s.movecursorfunc(s.cursors[i], f)
+	}
+}
+
+func (s *screen) movecursorfunc(c *cursor, f func(c *cursor) (int, int)) {
+	cury := c.y
+	s.registerRenderLine(cury)
+	c.x, c.y = f(c)
+	if c.y != cury {
+		s.registerRenderLine(c.y)
+	}
+}
+
+func (s *screen) _movecursor(c *cursor, direction direction, cnt int) (int, int) {
+	switch direction {
+	case up:
+		return c.x, max(c.y-cnt, 0)
+
+	case down:
+		return c.x, min(c.y+cnt, len(s.lines)-1)
 
 	case left:
-		nextx := max(0, s.xidx()-cnt)
-		s.x = s.curline().widthto(nextx)
+		nextx := max(0, s.xidx(c)-cnt)
+		return s.curline(c).widthto(nextx), c.y
 
 	case right:
-		nextx := min(s.curline().length()-1, s.xidx()+cnt)
-		s.x = s.curline().widthto(nextx)
+		nextx := min(s.curline(c).length()-1, s.xidx(c)+cnt)
+		return s.curline(c).widthto(nextx), c.y
 
 	default:
 		panic("invalid direction is passed")
 	}
-	s.selectedlines = append(s.selectedlines, s.y)
 }
 
-func (s *screen) movetonextch(c *character) {
-	line := s.curline()
-	for i := s.xidx() + 1; i < line.length(); i++ {
-		if line.buffer[i].equal(c) {
-			s.x = line.widthto(i)
-			s.selectedlines = append(s.selectedlines, s.y)
-			break
+func (s *screen) movecursors(direction direction, cnt int) {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		return s._movecursor(c, direction, cnt)
+	})
+}
+
+func (s *screen) movecursor(c *cursor, direction direction, cnt int) {
+	s.movecursorfunc(c, func(c *cursor) (int, int) {
+		return s._movecursor(c, direction, cnt)
+	})
+}
+
+func (s *screen) movecursorstonextch(ch *character) {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		line := s.curline(c)
+		newx := c.x
+		for i := s.xidx(c) + 1; i < line.length(); i++ {
+			if line.buffer[i].equal(ch) {
+				newx = line.widthto(i)
+				break
+			}
 		}
-	}
-	// if c is not found, do not move
+		// if ch is not found, newx is still the original x, so not moved
+		return newx, c.y
+	})
 }
 
-func (s *screen) movetoprevch(c *character) {
-	line := s.curline()
-	for i := s.xidx() - 1; 0 <= i; i-- {
-		if line.buffer[i].equal(c) {
-			s.x = line.widthto(i)
-			s.selectedlines = append(s.selectedlines, s.y)
-			break
+func (s *screen) movecursorstoprevch(ch *character) {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		line := s.curline(c)
+		newx := c.x
+		for i := s.xidx(c) - 1; 0 <= i; i-- {
+			if line.buffer[i].equal(ch) {
+				newx = line.widthto(i)
+				break
+			}
 		}
-	}
-	// if c is not found, do not move
+		// if ch is not found, newx is still the original x, so not moved
+		return newx, c.y
+	})
 }
 
-func (s *screen) gototopleft() {
-	s.unselectedlines = append(s.unselectedlines, s.y)
-	s.x, s.y = 0, 0
-	s.selectedlines = append(s.selectedlines, s.y)
+func (s *screen) movecursorstotopleft() {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		return 0, 0
+	})
 }
 
-func (s *screen) gotobottomleft() {
-	s.unselectedlines = append(s.unselectedlines, s.y)
-	s.x, s.y = 0, len(s.lines)-1
-	s.selectedlines = append(s.selectedlines, s.y)
+func (s *screen) movecursorstobottomleft() {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		return 0, len(s.lines) - 1
+	})
 }
 
-func (s *screen) gotolinebottom() {
-	s.x = s.curline().width() - 1
-	s.selectedlines = append(s.selectedlines, s.y)
+func (s *screen) movecursorstolinebottom() {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		return s.curline(c).width() - 1, c.y
+	})
 }
 
-func (s *screen) gotolineheadch() {
-	x := 0
-	curline := s.curline()
-	for i := range curline.buffer {
-		if !curline.buffer[i].isspace() {
-			break
+func (s *screen) movecursorstononspacelinehead() {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		x := 0
+		curline := s.curline(c)
+		for i := range curline.buffer {
+			if !curline.buffer[i].isspace() {
+				break
+			}
+			x += curline.buffer[i].width
 		}
-		x += curline.buffer[i].width
-	}
-	s.x = x
-	s.selectedlines = append(s.selectedlines, s.y)
+		return x, c.y
+	})
 }
 
-func (s *screen) gotolinehead() {
-	s.x = 0
-	s.selectedlines = append(s.selectedlines, s.y)
+func (s *screen) movecursorstolinehead() {
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		return 0, c.y
+	})
 }
 
-func (s *screen) gotoline(line int) {
+func (s *screen) movecursorstoline(line int) {
 	if len(s.lines) < line {
 		line = len(s.lines)
 	}
 
-	s.unselectedlines = append(s.unselectedlines, s.y)
-	s.y = line - 1
-	s.selectedlines = append(s.selectedlines, s.y)
+	s.movecursorsfunc(func(c *cursor) (int, int) {
+		return 0, line - 1
+	})
 }
 
-func (s *screen) insline(direction direction) {
+/* text modification */
+
+func (s *screen) shiftcursors(direction direction, from, amount int) {
+	for i := from; i < len(s.cursors); i++ {
+		s.registerRenderLine(s.cursors[i].y)
+		switch direction {
+		case up:
+			s.cursors[i].y -= amount
+		case down:
+			s.cursors[i].y += amount
+		default:
+			panic("invalid direction passed")
+		}
+		s.registerRenderLine(s.cursors[i].y)
+	}
+}
+
+func (s *screen) insertcharsatcursors(chars []*character) {
+	for _, c := range s.cursors {
+		s.alignx(c)
+		s.curline(c).inschars(chars, s.xidx(c))
+		s.movecursors(right, len(chars))
+		s.registerRenderLine(c.y)
+	}
+}
+
+func (s *screen) deletecursorchar() {
+	for i, c := range s.cursors {
+		if s.atlinetail(c) && c.y+1 < len(s.lines) {
+			// when removing nl, concat current and next line
+			s.joinlines(c.y, c.y+1)
+			s.shiftcursors(up, i+1, 1)
+		} else {
+			s.curline(c).delchar(s.xidx(c))
+			s.dirty = true
+			s.registerRenderLine(c.y)
+		}
+	}
+}
+
+func (s *screen) deletecursorprevchar() {
+	for i, c := range s.cursors {
+		switch s.xidx(c) {
+		case 0:
+			if c.y != 0 {
+				s.registerRenderLineAfter(c.y)
+				// join current and above line
+				// next x is right edge on the above line
+				nextx := s.lines[c.y-1].width() - 1
+				s.joinlines(c.y-1, c.y)
+				s.movecursor(c, up, 1)
+				c.x = nextx
+				s.shiftcursors(up, i, 1)
+			}
+
+		default:
+			// just delete the char
+
+			// move cursor before deleting char to prevent
+			// the cursor points nowhere after deleting the rightmost char.
+			s.movecursor(c, left, 1)
+			s.curline(c).delchar(s.xidx(c) - 1)
+			s.registerRenderLine(c.y)
+		}
+	}
+}
+
+func (s *screen) insertlinefromcursors(direction direction) {
+	for i, c := range s.cursors {
+		s.insline(c, direction)
+		s.shiftcursors(down, i+1, 1)
+		s.movecursor(c, direction, 1)
+	}
+}
+
+func (s *screen) insline(c *cursor, direction direction) {
 	switch direction {
 	case up:
-		s.lines = slices.Insert(s.lines, s.y, newemptyline())
-		s.lineattrs = slices.Insert(s.lineattrs, s.y, &lineattribute{})
+		s.lines = slices.Insert(s.lines, c.y, newemptyline())
+		s.lineattrs = slices.Insert(s.lineattrs, c.y, &lineattribute{})
 	case down:
-		s.lines = slices.Insert(s.lines, s.y+1, newemptyline())
-		s.lineattrs = slices.Insert(s.lineattrs, s.y+1, &lineattribute{})
+		s.lines = slices.Insert(s.lines, c.y+1, newemptyline())
+		s.lineattrs = slices.Insert(s.lineattrs, c.y+1, &lineattribute{})
 	default:
-		panic("invalid direction is passed to addline")
+		panic("invalid direction is passed")
 	}
 
-	for i := s.y; i < len(s.lines); i++ {
-		s.changedlines = append(s.changedlines, i)
-	}
+	s.registerRenderLineAfter(c.y)
 	s.dirty = true
 	s.updatelinenumberwidth()
 }
 
 func (s *screen) delline(y int) {
-	for i := y; i < len(s.lines); i++ {
-		s.changedlines = append(s.changedlines, i)
-	}
+	s.registerRenderLineAfter(y)
 	s.lines = slices.Delete(s.lines, y, y+1)
 	s.lineattrs = slices.Delete(s.lineattrs, y, y+1)
 	s.updatelinenumberwidth()
 }
 
-func (s *screen) inschars(chars []*character) {
-	s.inscharsat(chars, s.xidx())
-}
-
-func (s *screen) inscharsat(chars []*character, at int) {
-	s.curline().inschars(chars, at)
-	s.changedlines = append(s.changedlines, s.y)
+func (s *screen) replacecursorchar(ch *character) {
+	for _, c := range s.cursors {
+		s.curline(c).replacech(ch, s.xidx(c))
+		s.registerRenderLine(c.y)
+	}
 	s.dirty = true
-}
-
-func (s *screen) delchar() {
-	s.delcharat(s.xidx())
-	s.dirty = true
-}
-
-func (s *screen) delcharat(idx int) {
-	s.curline().delchar(idx)
-	s.changedlines = append(s.changedlines, s.y)
-	s.dirty = true
-	s.updatelinenumberwidth()
-}
-
-func (s *screen) replacech(ch *character) {
-	s.curline().replacech(ch, s.xidx())
-	s.changedlines = append(s.changedlines, s.y)
-	s.dirty = true
-}
-
-func (s *screen) yankch() {
-	s.yankedch = s.curline().buffer[s.xidx()]
-}
-
-// return x character index from the current cursor position on screen
-func (s *screen) xidx() int {
-	return s.curline().charidx(s.actualx-s.linenumberwidth-1, s.xoffset)
-}
-
-// ensure current s.x is pointing on the correct character position.
-// if x is too right after up/down move, fix x position.
-// if x is not aligning to the multi length character head, align there.
-func (s *screen) alignx() {
-	s.x = s.curline().widthto(s.xidx())
 }
 
 // from, to both inclusive
@@ -1721,15 +1782,61 @@ func (s *screen) joinlines(from, to int) {
 		s.delline(i)
 	}
 
-	s.changedlines = append(s.changedlines, from)
+	s.registerRenderLineAfter(from)
 	s.dirty = true
 	s.updatelinenumberwidth()
 }
 
-func (s *screen) clearline() {
-	s.curline().clear()
-	s.changedlines = append(s.changedlines, s.y)
+func (s *screen) splitcursorsline() {
+	for i, c := range s.cursors {
+		s.registerRenderLineAfter(c.y)
+
+		curline := s.curline(c).copy()
+		nextline := s.curline(c).copy()
+		curidx := s.xidx(c)
+
+		s.curline(c).clear()
+		s.curline(c).inschars(curline.buffer[:curidx], 0)
+
+		s.insline(c, down)
+		s.movecursor(c, down, 1)
+		s.curline(c).inschars(nextline.buffer[curidx:len(nextline.buffer)-1], 0)
+		c.x = 0
+
+		s.shiftcursors(down, i+1, 1)
+	}
+	s.dirty = true
 }
+
+/* helpers */
+
+func (s *screen) atlinetail(c *cursor) bool {
+	return s.xidx(c) == s.curline(c).length()-1
+}
+
+// return x character index from the current cursor position on screen
+func (s *screen) xidx(c *cursor) int {
+	return s.curline(c).charidx(c.actualx-s.linenumberwidth-1, s.xoffset)
+}
+
+// ensure current s.x is pointing on the correct character position.
+// if x is too right after up/down move, fix x position.
+// if x is not aligning to the multi length character head, align there.
+func (s *screen) alignx(c *cursor) {
+	c.x = s.curline(c).widthto(s.xidx(c))
+}
+
+func (s *screen) registerRenderLine(y int) {
+	s.linestoberendered = append(s.linestoberendered, y)
+}
+
+func (s *screen) registerRenderLineAfter(after int) {
+	for i := after; i < len(s.lines); i++ {
+		s.linestoberendered = append(s.linestoberendered, i)
+	}
+}
+
+/* file persistence */
 
 func (s *screen) content() []byte {
 	buf := []byte{}
@@ -1926,7 +2033,7 @@ func (w *window) render(term *screenterm, first bool) {
 }
 
 func (w *window) actualcursor() (int, int) {
-	return w.x + w.screen.actualx, w.y + w.screen.y - w.screen.yoffset
+	return w.x + w.screen.cursors[0].actualx, w.y + w.screen.cursors[0].y - w.screen.yoffset
 }
 
 func (w *window) getallleaves() []*window {
@@ -2178,14 +2285,11 @@ func (e *editor) render(first bool) {
 	e.term.clearline(e.height - 1)
 	if !e.msg.empty() {
 		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{}, []int{})))
-	} else {
-		cursor := []int{}
-		if e.mode == command {
-			cursor = []int{e.cmdx + 1}
-			// e.term.putcursor(e.cmdx+1, e.height-1)
-		}
-
-		e.term.write([]byte(e.commandline().cutandcolorize(0, e.width, []int{}, cursor)))
+	} else if e.mode == command {
+		cursor := []int{e.cmdx + 1}
+		cl := e.commandline()
+		cl.delnl()
+		e.term.write([]byte(cl.cutandcolorize(0, e.width, []int{}, cursor)))
 	}
 
 	if e.windowchanged {
