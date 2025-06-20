@@ -981,8 +981,13 @@ func (s *lineattribute) String() string {
 }
 
 type cursor struct {
-	x, y    int
+	x       int
+	y       int
 	actualx int
+}
+
+func (c *cursor) String() string {
+	return fmt.Sprintf("{x: %v, y: %v, actualx: %v}", c.x, c.y, c.actualx)
 }
 
 type screen struct {
@@ -1312,7 +1317,7 @@ func (s *screen) cleanupcursors() {
 		return -1
 	})
 	s.cursors = slices.CompactFunc(s.cursors, func(c1, c2 *cursor) bool {
-		return c1.x == c2.x && c2.y == c2.y
+		return c1.x == c2.x && c1.y == c2.y
 	})
 }
 
@@ -1367,6 +1372,11 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 			switch buff.r {
 			// case '\\':
 			// 	debug(0, "debug line (%v): '%v', attr: %v\n", s.y, s.curline(), s.lineattrs[s.y])
+			case 'C':
+				s.addcursorbelow()
+
+			case ',':
+				s.deletecursors()
 
 			case 'd':
 				s.deletecursorchar()
@@ -1662,7 +1672,7 @@ func (s *screen) movecursorstoline(line int) {
 	})
 }
 
-/* text modification */
+/* cursor manipulation */
 
 func (s *screen) shiftcursors(direction direction, from, amount int) {
 	for i := from; i < len(s.cursors); i++ {
@@ -1678,6 +1688,29 @@ func (s *screen) shiftcursors(direction direction, from, amount int) {
 		s.registerRenderLine(s.cursors[i].y)
 	}
 }
+
+func (s *screen) addcursorbelow() {
+	lastcursor := s.cursors[len(s.cursors)-1]
+	for i := lastcursor.y + 1; i < len(s.lines); i++ {
+		if lastcursor.x < s.lines[i].width() {
+			s.cursors = append(s.cursors, &cursor{x: lastcursor.x, y: i, actualx: lastcursor.actualx})
+			s.registerRenderLine(i)
+			break
+		}
+	}
+}
+
+func (s *screen) deletecursors() {
+	for i, c := range s.cursors {
+		if i == len(s.cursors)-1 {
+			break
+		}
+		s.registerRenderLine(c.y)
+	}
+	s.cursors = slices.Delete(s.cursors, 0, len(s.cursors)-1)
+}
+
+/* text modification */
 
 func (s *screen) insertcharsatcursors(chars []*character) {
 	for _, c := range s.cursors {
