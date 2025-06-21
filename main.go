@@ -1099,11 +1099,11 @@ func (s *screen) curline(c *cursor) *line {
 }
 
 func (s *screen) render(force bool) {
-	firstcursor := s.cursors[0]
+	maincursor := s.cursors[len(s.cursors)-1]
 
 	// when the x is too right, set x to the line tail.
 	// This must not change s.x because s.x should be kept when moving to another long line.
-	x := min(firstcursor.x, s.curline(firstcursor).width()-1)
+	x := min(maincursor.x, s.curline(maincursor).width()-1)
 
 	/* scroll x */
 
@@ -1122,7 +1122,7 @@ func (s *screen) render(force bool) {
 
 		// too right, scroll right
 		if s.xoffset+s.width-(s.linenumberwidth+1)-1 < x+xpad {
-			if s.curline(firstcursor).width()-1 < x+xpad && x <= s.xoffset+s.width-(s.linenumberwidth+1)-1 {
+			if s.curline(maincursor).width()-1 < x+xpad && x <= s.xoffset+s.width-(s.linenumberwidth+1)-1 {
 				// too right but no enough space right
 				return 0
 			}
@@ -1150,8 +1150,8 @@ func (s *screen) render(force bool) {
 
 	ypad := 4
 	yok := func() direction {
-		padup := firstcursor.y - s.yoffset
-		paddown := (s.yoffset + s.height - 2) - firstcursor.y
+		padup := maincursor.y - s.yoffset
+		paddown := (s.yoffset + s.height - 2) - maincursor.y
 
 		// cursor has up and down padding, it's ok
 		if padup >= ypad && paddown >= ypad {
