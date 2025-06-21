@@ -2178,6 +2178,7 @@ type editor struct {
 	cmdline       *line
 	cmdx          int
 	msg           *line
+	errmsg        *line
 }
 
 func (e *editor) changemode(mode mode) {
@@ -2199,13 +2200,13 @@ func (e *editor) split(filename string, direction direction) {
 
 	_, err := os.Stat(filename)
 	if err != nil {
-		e.msg = newline(fmt.Sprintf("file not found: '%v'", filename))
+		e.errmsg = newline(fmt.Sprintf("file not found: '%v'", filename))
 		e.changemode(normal)
 		return
 	}
 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		e.msg = newline(fmt.Sprintf("cannot open: '%v'", filename))
+		e.errmsg = newline(fmt.Sprintf("cannot open: '%v'", filename))
 		e.changemode(normal)
 		return
 	}
@@ -2273,7 +2274,7 @@ func (e *editor) jumpwin(direction direction) {
 
 func (e *editor) closewin() {
 	if e.activewin.screen.dirty {
-		e.msg = newline(fmt.Sprintf("unsaved change remaining: '%v'", e.activewin.screen.file.Name()))
+		e.errmsg = newline(fmt.Sprintf("unsaved change remaining: '%v'", e.activewin.screen.file.Name()))
 		return
 	}
 
@@ -2317,7 +2318,10 @@ func (e *editor) render(first bool) {
 
 	/* update command line */
 	e.term.clearline(e.height - 1)
-	if !e.msg.empty() {
+	if !e.errmsg.empty() {
+		red := slices.Repeat([]int{1}, len(e.errmsg.buffer))
+		e.term.write([]byte(e.errmsg.cutandcolorize(0, e.width, red, []int{})))
+	} else if !e.msg.empty() {
 		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{}, []int{})))
 	} else if e.mode == command {
 		cursor := []int{e.cmdx + 1}
@@ -2402,6 +2406,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 		cmdline: newemptyline(),
 		cmdx:    0,
 		msg:     newemptyline(),
+		errmsg:  newemptyline(),
 	}
 
 	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, e.theme)
@@ -2418,6 +2423,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 		// reset message
 		// this keeps showing the message just until the next input
 		e.msg = newemptyline()
+		e.errmsg = newemptyline()
 
 		buff := reader.read()
 
@@ -2482,7 +2488,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 					goto finish
 
 				default:
-					e.msg = newline("unknown command!")
+					e.errmsg = newline("unknown command!")
 					e.resetcmd()
 					e.changemode(normal)
 				}
