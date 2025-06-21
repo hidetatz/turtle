@@ -1296,6 +1296,7 @@ func (s *screen) highlightchangedlines() {
 	}
 }
 
+// unify the cursors at the same position
 func (s *screen) cleanupcursors() {
 	slices.SortFunc(s.cursors, func(c1, c2 *cursor) int {
 		if c1.x == c2.x && c1.y == c2.y {
