@@ -991,6 +991,7 @@ func (c *cursor) String() string {
 }
 
 type screen struct {
+	focused         bool
 	term            *screenterm
 	highlighter     highlighter
 	width           int
@@ -1014,8 +1015,9 @@ type screen struct {
 	dirty bool
 }
 
-func newscreen(term terminal, x, y, width, height int, file file, theme *theme) *screen {
+func newscreen(term terminal, x, y, width, height int, file file, theme *theme, focused bool) *screen {
 	s := &screen{
+		focused: focused,
 		term:    &screenterm{term: term, width: width, x: x, y: y},
 		height:  height,
 		width:   width,
@@ -1069,6 +1071,14 @@ func newscreen(term terminal, x, y, width, height int, file file, theme *theme) 
 	return s
 }
 
+func (s *screen) focus() {
+	s.focused = true
+}
+
+func (s *screen) unfocus() {
+	s.focused = false
+}
+
 func (s *screen) updatelinenumberwidth() {
 	if len(s.lines) < 10000 {
 		s.linenumberwidth = 4
@@ -1090,8 +1100,15 @@ func calcdigit(n int) int {
 	return digit
 }
 
-func (s *screen) statusline() *line {
-	return newline(fmt.Sprintf(" %v", s.file.Name()))
+func (s *screen) statusline() []byte {
+	l := newline(fmt.Sprintf(" %v", s.file.Name()))
+
+	var color []int
+	if s.focused {
+		color = slices.Repeat([]int{51}, len(l.buffer))
+	}
+
+	return []byte(l.cutandcolorize(0, s.width-(s.linenumberwidth+1), color, []int{}))
 }
 
 func (s *screen) curline(c *cursor) *line {
@@ -1222,12 +1239,14 @@ func (s *screen) render(force bool) {
 		linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
 
 		cursor := []int{}
-		for _, c := range _cursors {
-			if c.c.y != y {
-				continue
-			}
+		if s.focused {
+			for _, c := range _cursors {
+				if c.c.y != y {
+					continue
+				}
 
-			cursor = append(cursor, c.charidx)
+				cursor = append(cursor, c.charidx)
+			}
 		}
 		return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors, cursor))
 	}
@@ -1261,7 +1280,7 @@ func (s *screen) render(force bool) {
 
 	// render status line
 	s.term.clearline(s.height - 1)
-	s.term.write([]byte(s.statusline().cutandcolorize(0, s.width-(s.linenumberwidth+1), []int{}, []int{})))
+	s.term.write(s.statusline())
 	s.term.flush()
 	s.linestoberendered = []int{}
 	s.highlightupdatedlines = []int{}
@@ -1921,7 +1940,7 @@ func newleafwindow(term terminal, x, y, width, height int, file file, theme *the
 		y:      y,
 		width:  width,
 		height: height,
-		screen: newscreen(term, x, y, width, height, file, theme),
+		screen: newscreen(term, x, y, width, height, file, theme, false),
 	}
 }
 
@@ -2167,18 +2186,20 @@ func (w *window) string(depth int) string {
  */
 
 type editor struct {
-	term          *screenterm
-	theme         *theme
-	rootwin       *window
-	activewin     *window
-	windowchanged bool
-	height        int
-	width         int
-	mode          mode
-	cmdline       *line
-	cmdx          int
-	msg           *line
-	errmsg        *line
+	term               *screenterm
+	theme              *theme
+	rootwin            *window
+	activewin          *window
+	windowchanged      bool
+	jumpedwindowbefore *window
+	jumpedwindowafter  *window
+	height             int
+	width              int
+	mode               mode
+	cmdline            *line
+	cmdx               int
+	msg                *line
+	errmsg             *line
 }
 
 func (e *editor) changemode(mode mode) {
@@ -2211,7 +2232,9 @@ func (e *editor) split(filename string, direction direction) {
 		return
 	}
 
+	e.activewin.screen.unfocus()
 	e.activewin = e.activewin.split(e.term.term, direction, file, e.theme)
+	e.activewin.screen.focus()
 	e.windowchanged = true
 }
 
@@ -2269,7 +2292,11 @@ func (e *editor) jumpwin(direction direction) {
 		return
 	}
 
+	e.jumpedwindowbefore = e.activewin
+	e.activewin.screen.unfocus()
 	e.activewin = candidate
+	e.jumpedwindowafter = e.activewin
+	e.activewin.screen.focus()
 }
 
 func (e *editor) closewin() {
@@ -2278,7 +2305,11 @@ func (e *editor) closewin() {
 		return
 	}
 
+	e.activewin.screen.unfocus()
 	e.activewin = e.activewin.close()
+	if e.activewin != nil {
+		e.activewin.screen.focus()
+	}
 	e.windowchanged = true
 }
 
@@ -2333,6 +2364,10 @@ func (e *editor) render(first bool) {
 	if e.windowchanged {
 		e.rootwin.render(e.term, true)
 		e.activewin.screen.render(first)
+	} else if e.jumpedwindowbefore != nil {
+		// force re-render to apply status line and cursor visibility
+		e.jumpedwindowbefore.screen.render(true)
+		e.jumpedwindowafter.screen.render(true)
 	} else {
 		e.activewin.render(e.term, first)
 	}
@@ -2340,6 +2375,8 @@ func (e *editor) render(first bool) {
 	e.term.flush()
 
 	e.windowchanged = false
+	e.jumpedwindowbefore = nil
+	e.jumpedwindowafter = nil
 }
 
 func (e *editor) resetcmd() {
@@ -2411,6 +2448,7 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 
 	e.rootwin = newleafwindow(e.term.term, 0, 0, e.width, e.height-1, file, e.theme)
 	e.activewin = e.rootwin
+	e.activewin.screen.focus()
 	e.render(true)
 
 	/*
