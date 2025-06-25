@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 
@@ -1019,8 +1021,8 @@ func newscreen(term terminal, x, y, width, height int, file file, theme *theme, 
 	s := &screen{
 		focused: focused,
 		term:    &screenterm{term: term, width: width, x: x, y: y},
-		height:  height,
 		width:   width,
+		height:  height,
 		file:    file,
 		cursors: []*cursor{{0, 0, 0}},
 		xoffset: 0,
@@ -1341,7 +1343,7 @@ func (s *screen) cleanupcursors() {
 	})
 }
 
-func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
+func (s *screen) handle(curmode mode, buff *input, buffchan <-chan *input) mode {
 	numinput := false
 	num := 1
 	isnum, n := buff.isnumber()
@@ -1349,7 +1351,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 		numinput = true
 		num = n
 		for {
-			next := reader.read()
+			next := <-buffchan
 			isnum2, n2 := next.isnumber()
 			if !isnum2 {
 				buff = next
@@ -1418,7 +1420,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 			 * goto mode
 			 */
 			case 'g':
-				input2 := reader.read()
+				input2 := <-buffchan
 				switch input2.r {
 				case 'g':
 					s.movecursorstotopleft()
@@ -1440,19 +1442,19 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 				}
 
 			case 'f':
-				input2 := reader.read()
+				input2 := <-buffchan
 				if input2.special == _not_special_key {
 					s.movecursorstonextch(newcharacter(input2.r))
 				}
 
 			case 'F':
-				input2 := reader.read()
+				input2 := <-buffchan
 				if input2.special == _not_special_key {
 					s.movecursorstoprevch(newcharacter(input2.r))
 				}
 
 			case 'r':
-				input2 := reader.read()
+				input2 := <-buffchan
 				if input2.special == _not_special_key {
 					s.replacecursorchar(newcharacter(input2.r))
 				}
@@ -1513,7 +1515,7 @@ func (s *screen) handle(curmode mode, buff *input, reader *reader) mode {
 }
 
 func (s *screen) String() string {
-	return fmt.Sprintf("{file: %v, term: %v, w: %v, h: %v, xoffset: %v, yoffset: %v}", s.file.Name(), s.term, s.width, s.height, s.xoffset, s.yoffset)
+	return fmt.Sprintf("scr<%v (%v %v %v %v)>", s.file.Name(), s.term.x, s.term.y, s.width, s.height)
 }
 
 type direction int
@@ -2079,7 +2081,6 @@ func (w *window) render(term *screenterm, first bool) {
 					term.putcursor(child.x+j, child.y+child.height)
 					term.write([]byte("-"))
 				}
-
 			}
 		}
 	}
@@ -2113,20 +2114,33 @@ func (w *window) close() *window {
 		return nil
 	}
 
+	parent := w.parent
 	w.screen.file.Close()
 	next := w.parent.removechild(w)
-	if len(w.parent.children) == 1 {
-		w.parent.toleaf()
-		return w.parent
+	if len(parent.children) != 1 {
+		return next
 	}
 
-	return next
+	// when only 1 children exists, the tree rebalance is required.
+	parent.toleaf()
+	if parent.isleaf() {
+		return parent
+	}
+
+	return parent.firstleaf()
 }
 
 func (w *window) toleaf() {
+	w.x = w.children[0].x
+	w.y = w.children[0].y
+	w.width = w.children[0].width
+	w.height = w.children[0].height
 	w.screen = w.children[0].screen
-	w.children = []*window{}
-	w.direction = 0
+	w.direction = w.children[0].direction
+	w.children = w.children[0].children // must be at bottom
+	for _, child := range w.children {
+		child.parent = w
+	}
 }
 
 func (w *window) removechild(child *window) *window {
@@ -2159,25 +2173,12 @@ func (w *window) String() string {
 
 func (w *window) string(depth int) string {
 	var sb strings.Builder
-	f0 := func(s string, a ...any) { sb.WriteString(fmt.Sprintf(s, a...)) }
-	f := func(s string, a ...any) { sb.WriteString(strings.Repeat("  ", depth) + fmt.Sprintf(s, a...)) }
-	f2 := func(s string, a ...any) { sb.WriteString(strings.Repeat("  ", depth+1) + fmt.Sprintf(s, a...)) }
-
-	f("{\n")
-	f2("x: %v, y: %v, width: %v, height: %v, direction: %v,\n", w.x, w.y, w.width, w.height, w.direction)
-	f2("screen: %v\n", w.screen)
-	f2("children : [")
-	if len(w.children) == 0 {
-		f0("]\n")
-	} else {
-		f0("\n")
+	sb.WriteString(fmt.Sprintf("win<%p %v (%v %v %v %v) %p %v>\n", w, w.direction, w.x, w.y, w.width, w.height, w.parent, w.screen))
+	if len(w.children) != 0 {
 		for _, child := range w.children {
-			f0("%v\n", child.string(depth+2))
+			sb.WriteString(fmt.Sprintf(strings.Repeat("  ", depth+1)+"└ %s", child.string(depth+1)))
 		}
-		f2("]\n")
 	}
-	f("}")
-
 	return sb.String()
 }
 
@@ -2193,8 +2194,8 @@ type editor struct {
 	windowchanged      bool
 	jumpedwindowbefore *window
 	jumpedwindowafter  *window
-	height             int
 	width              int
+	height             int
 	mode               mode
 	cmdline            *line
 	cmdx               int
@@ -2388,23 +2389,23 @@ func (e *editor) save() {
 	e.activewin.screen.save()
 }
 
+func (e *editor) resize(width, height int) {
+	e.width = width
+	e.height = height
+	e.term.width = width
+	e.rootwin.changesize(e.rootwin.x, e.rootwin.y, width, height-1)
+	e.windowchanged = true
+}
+
 func (e *editor) String() string {
 	var sb strings.Builder
-	f := func(s string, a ...any) { sb.WriteString(fmt.Sprintf(s, a...)) }
-	f2 := func(s string, a ...any) { sb.WriteString("  " + fmt.Sprintf(s, a...)) }
-
-	f("[DEBUG] editor_state{\n")
-	f2("term: %v,\n", e.term)
-	f2("width: %v, height: %v, mode: %v, cmdline: '%v', cmdx: %v, msg: '%v'\n", e.width, e.height, e.mode, e.cmdline, e.cmdx, e.msg)
-	f2("rootwin: %v,\n", e.rootwin.string(1))
-	f2("activewin: {name: %v, x: %v, y: %v},\n", e.activewin.screen.file.Name(), e.activewin.x, e.activewin.y)
-	f("}")
-
+	sb.WriteString(fmt.Sprintf("edt<%v (%v %v %v %v) ':%v' %p>\n", e.mode, e.term.x, e.term.y, e.width, e.height, strings.TrimSuffix(e.cmdline.String(), " "), e.activewin))
+	sb.WriteString(fmt.Sprintf("  └ %v", e.rootwin.string(1)))
 	return sb.String()
 }
 
 func (e *editor) debug() {
-	debug(2, "%v\n", e)
+	debug(2, "%v", e)
 }
 
 func start(term terminal, in io.Reader, file file, theme *theme) {
@@ -2429,16 +2430,29 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 	 * Prepare editor state
 	 */
 
-	height, width, err := term.windowsize()
+	width, height, err := term.windowsize()
 	if err != nil {
 		panic(err)
 	}
 
+	windowsizechanged := make(chan int)
+
+	go func() {
+		for {
+			c := make(chan os.Signal, 1)
+			signal.Notify(c, syscall.SIGWINCH)
+			select {
+			case <-c:
+				windowsizechanged <- 1
+			}
+		}
+	}()
+
 	e := &editor{
 		term:    newscreenterm(term, 0, 0, width),
 		theme:   theme,
-		height:  height,
 		width:   width,
+		height:  height,
 		mode:    normal,
 		cmdline: newemptyline(),
 		cmdx:    0,
@@ -2456,132 +2470,145 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 	 */
 
 	reader := &reader{r: bufio.NewReader(in)}
+	buffchan := make(chan *input, 1)
+	go func() {
+		reader.tryread(buffchan)
+	}()
 
 	for {
-		// reset message
-		// this keeps showing the message just until the next input
-		e.msg = newemptyline()
-		e.errmsg = newemptyline()
-
-		buff := reader.read()
-
-		switch e.mode {
-		case command:
-			switch buff.special {
-			case _left:
-				e.movecmdcursor(left)
-
-			case _right:
-				e.movecmdcursor(right)
-
-			case _esc:
-				e.resetcmd()
-				e.changemode(normal)
-
-			case _bs:
-				if 0 < e.cmdx {
-					e.movecmdcursor(left)
-					e.cmdline.delchar(e.cmdxidx())
-				}
-
-			case _cr:
-				switch {
-				case e.cmdline.equal("q"):
-					e.resetcmd()
-					e.changemode(normal)
-					e.closewin()
-					if e.activewin == nil {
-						goto finish
-					}
-
-				case e.cmdline.equal("q!"):
-					e.resetcmd()
-					e.changemode(normal)
-					e.closewinforce()
-					if e.activewin == nil {
-						goto finish
-					}
-
-				case e.cmdline.hasprefix("vs "):
-					filename := e.cmdline.trimprefix("vs ")
-					e.vsplit(filename)
-					e.resetcmd()
-					e.changemode(normal)
-
-				case e.cmdline.hasprefix("hs"):
-					filename := e.cmdline.trimprefix("hs ")
-					e.hsplit(filename)
-					e.resetcmd()
-					e.changemode(normal)
-
-				case e.cmdline.equal("w"):
-					e.save()
-					e.msg = newline("saved!")
-					e.resetcmd()
-					e.changemode(normal)
-
-				case e.cmdline.equal("wq"):
-					e.save()
-					e.resetcmd()
-					goto finish
-
-				default:
-					e.errmsg = newline("unknown command!")
-					e.resetcmd()
-					e.changemode(normal)
-				}
-
-			case _not_special_key:
-				e.cmdline.inschars([]*character{newcharacter(buff.r)}, e.cmdxidx())
-				e.movecmdcursor(right)
+		select {
+		case <-windowsizechanged:
+			width, height, err := term.windowsize()
+			if err != nil {
+				panic(err)
 			}
+			e.resize(width, height)
+			e.render(true)
 
-		case normal:
-			switch buff.special {
-			case _ctrl_w:
-				input2 := reader.read()
-				switch {
-				case input2.r == 'h', input2.special == _ctrl_h, input2.special == _left:
-					e.jumpwin(left)
-				case input2.r == 'j', input2.special == _ctrl_j, input2.special == _down:
-					e.jumpwin(down)
-				case input2.r == 'k', input2.special == _ctrl_k, input2.special == _up:
-					e.jumpwin(up)
-				case input2.r == 'l', input2.special == _ctrl_l, input2.special == _right:
-					e.jumpwin(right)
-				default:
-					// do nothing
+		case buff := <-buffchan:
+			// reset message
+			// this keeps showing the message just until the next input
+			e.msg = newemptyline()
+			e.errmsg = newemptyline()
+
+			switch e.mode {
+			case command:
+				switch buff.special {
+				case _left:
+					e.movecmdcursor(left)
+
+				case _right:
+					e.movecmdcursor(right)
+
+				case _esc:
+					e.resetcmd()
+					e.changemode(normal)
+
+				case _bs:
+					if 0 < e.cmdx {
+						e.movecmdcursor(left)
+						e.cmdline.delchar(e.cmdxidx())
+					}
+
+				case _cr:
+					switch {
+					case e.cmdline.equal("q"):
+						e.resetcmd()
+						e.changemode(normal)
+						e.closewin()
+						if e.activewin == nil {
+							goto finish
+						}
+
+					case e.cmdline.equal("q!"):
+						e.resetcmd()
+						e.changemode(normal)
+						e.closewinforce()
+						if e.activewin == nil {
+							goto finish
+						}
+
+					case e.cmdline.hasprefix("vs "):
+						filename := e.cmdline.trimprefix("vs ")
+						e.vsplit(filename)
+						e.resetcmd()
+						e.changemode(normal)
+
+					case e.cmdline.hasprefix("hs"):
+						filename := e.cmdline.trimprefix("hs ")
+						e.hsplit(filename)
+						e.resetcmd()
+						e.changemode(normal)
+
+					case e.cmdline.equal("w"):
+						e.save()
+						e.msg = newline("saved!")
+						e.resetcmd()
+						e.changemode(normal)
+
+					case e.cmdline.equal("wq"):
+						e.save()
+						e.resetcmd()
+						goto finish
+
+					default:
+						e.errmsg = newline("unknown command!")
+						e.resetcmd()
+						e.changemode(normal)
+					}
+
+				case _not_special_key:
+					e.cmdline.inschars([]*character{newcharacter(buff.r)}, e.cmdxidx())
+					e.movecmdcursor(right)
 				}
-			case _not_special_key:
-				switch buff.r {
-				case ':':
-					e.changemode(command)
-				case 'i':
-					e.changemode(insert)
+
+			case normal:
+				switch buff.special {
+				case _ctrl_w:
+					input2 := <-buffchan
+					switch {
+					case input2.r == 'h', input2.special == _ctrl_h, input2.special == _left:
+						e.jumpwin(left)
+					case input2.r == 'j', input2.special == _ctrl_j, input2.special == _down:
+						e.jumpwin(down)
+					case input2.r == 'k', input2.special == _ctrl_k, input2.special == _up:
+						e.jumpwin(up)
+					case input2.r == 'l', input2.special == _ctrl_l, input2.special == _right:
+						e.jumpwin(right)
+					default:
+						// do nothing
+					}
+				case _not_special_key:
+					switch buff.r {
+					case ':':
+						e.changemode(command)
+					case 'i':
+						e.changemode(insert)
+					default:
+						newmode := e.activewin.screen.handle(e.mode, buff, buffchan)
+						e.changemode(newmode)
+					}
 				default:
-					newmode := e.activewin.screen.handle(e.mode, buff, reader)
+					newmode := e.activewin.screen.handle(e.mode, buff, buffchan)
 					e.changemode(newmode)
 				}
+
+			case insert:
+				switch buff.special {
+				case _esc:
+					e.changemode(normal)
+				default:
+					newmode := e.activewin.screen.handle(e.mode, buff, buffchan)
+					e.changemode(newmode)
+				}
+
 			default:
-				newmode := e.activewin.screen.handle(e.mode, buff, reader)
-				e.changemode(newmode)
+				panic("unknown mode")
 			}
 
-		case insert:
-			switch buff.special {
-			case _esc:
-				e.changemode(normal)
-			default:
-				newmode := e.activewin.screen.handle(e.mode, buff, reader)
-				e.changemode(newmode)
-			}
-
-		default:
-			panic("unknown mode")
+			e.debug()
+			e.render(false)
 		}
-
-		e.render(false)
-		e.debug()
 	}
 
 finish:
@@ -2806,12 +2833,20 @@ type reader struct {
 	r *bufio.Reader
 }
 
+func (r *reader) tryread(c chan<- *input) {
+	for {
+		// block
+		i := r.read()
+		c <- i
+	}
+}
+
 func (r *reader) read() (i *input) {
 	var dbg []byte
 
 	defer func() {
 		if i.special == _unknown {
-			debug(1, "read: unknown input detected: %v\n", string(dbg))
+			debug(1, "read: unknown input detected: %v", string(dbg))
 		}
 	}()
 
@@ -2955,7 +2990,7 @@ func (r *reader) read() (i *input) {
 
 func debug(level int, format string, a ...any) (int, error) {
 	if level <= _debuglevel {
-		return fmt.Fprintf(os.Stderr, format, a...)
+		return fmt.Fprintf(os.Stderr, format+"\n", a...)
 	}
 	return 0, nil
 }
@@ -3058,7 +3093,7 @@ func (t *unixVT100term) init() (func(), error) {
 
 func (t *unixVT100term) windowsize() (int, int, error) {
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
-	return height, width, err
+	return width, height, err
 }
 
 func (t *unixVT100term) refresh() {
