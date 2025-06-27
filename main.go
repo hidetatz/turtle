@@ -1592,12 +1592,32 @@ func (s *screen) _movecursor(c *cursor, direction direction, cnt int) (int, int)
 		return c.x, min(c.y+cnt, len(s.lines)-1)
 
 	case left:
-		nextx := max(0, s.xidx(c)-cnt)
-		return s.curline(c).widthto(nextx), c.y
+		nextx := s.xidx(c) - cnt
+		if 0 <= nextx {
+			// move left if possible
+			return s.curline(c).widthto(nextx), c.y
+		}
+
+		// if no chars at leftside, move to above line tail
+		if c.y == 0 {
+			// if already at the top line, do nothing.
+			return c.x, c.y
+		}
+		return s.lines[c.y-1].width(), c.y - 1
 
 	case right:
-		nextx := min(s.curline(c).length()-1, s.xidx(c)+cnt)
-		return s.curline(c).widthto(nextx), c.y
+		nextx := s.xidx(c) + cnt
+		if nextx < s.curline(c).length() {
+			// move right if possible
+			return s.curline(c).widthto(nextx), c.y
+		}
+
+		// if no chars at rightside, move to below line head
+		if c.y == len(s.lines)-1 {
+			// if already at the bottom line, do nothing.
+			return c.x, c.y
+		}
+		return 0, c.y + 1
 
 	default:
 		panic("invalid direction is passed")
