@@ -49,16 +49,19 @@ const (
 	normal mode = iota + 1
 	insert
 	command
+	lineselect
 )
 
 func (m mode) String() string {
 	switch m {
 	case normal:
-		return "NOR"
+		return "NORM"
 	case insert:
-		return "INS"
+		return "INSR"
 	case command:
-		return "CMD"
+		return "CMND"
+	case lineselect:
+		return "LSEL"
 	default:
 		panic("unknown mode")
 	}
@@ -254,12 +257,19 @@ func (l *line) substring(start, end int) string {
 	return s
 }
 
-func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) string {
+func (l *line) cutandcolorize(from, width int, colors []int, bgcolors []int, inverts []int) string {
 	colorize := func(s string, color int) string {
 		if color == -1 {
 			return s
 		}
-		return fmt.Sprintf("\x1b[38;5;%dm%v\x1b[0m", int(color), s)
+		return fmt.Sprintf("\x1b[38;5;%dm%v\x1b[0m", color, s)
+	}
+
+	colorizebg := func(s string, color int) string {
+		if color == -1 {
+			return s
+		}
+		return fmt.Sprintf("\x1b[48;5;%dm%v\x1b[0m", color, s)
 	}
 
 	invert := func(s string) string {
@@ -268,6 +278,7 @@ func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) stri
 
 	var runes []rune
 	var _colors []int
+	var _bgcolors []int
 	var widths []int
 	var _inverts []int
 
@@ -277,6 +288,13 @@ func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) stri
 			runes = append(runes, ' ', ' ', ' ', ' ')
 			if len(colors) != 0 {
 				_colors = append(_colors, colors[i], colors[i], colors[i], colors[i])
+			} else {
+				_colors = append(_colors, -1, -1, -1, -1)
+			}
+			if len(bgcolors) != 0 {
+				_bgcolors = append(_bgcolors, bgcolors[i], bgcolors[i], bgcolors[i], bgcolors[i])
+			} else {
+				_bgcolors = append(_bgcolors, -1, -1, -1, -1)
 			}
 			widths = append(widths, 1, 1, 1, 1)
 
@@ -289,6 +307,7 @@ func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) stri
 			runes = append(runes, ' ')
 			widths = append(widths, 1)
 			_colors = append(_colors, -1)
+			_bgcolors = append(_bgcolors, -1)
 			if slices.Contains(inverts, i) {
 				length := len(runes)
 				_inverts = append(_inverts, length-1)
@@ -298,6 +317,13 @@ func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) stri
 			runes = append(runes, l.buffer[i].r)
 			if len(colors) != 0 {
 				_colors = append(_colors, colors[i])
+			} else {
+				_colors = append(_colors, -1)
+			}
+			if len(bgcolors) != 0 {
+				_bgcolors = append(_bgcolors, bgcolors[i])
+			} else {
+				_bgcolors = append(_bgcolors, -1)
 			}
 			widths = append(widths, l.buffer[i].width)
 
@@ -325,12 +351,18 @@ func (l *line) cutandcolorize(from, width int, colors []int, inverts []int) stri
 			continue
 		}
 
-		if len(colors) == 0 {
-			str += string(runes[i])
+		if _bgcolors[i] != -1 {
+			str += colorizebg(string(runes[i]), _bgcolors[i])
 			continue
 		}
 
-		str += colorize(string(runes[i]), _colors[i])
+		if _colors[i] != -1 {
+			str += colorize(string(runes[i]), _colors[i])
+			continue
+		}
+
+		// no color
+		str += string(runes[i])
 	}
 
 	return str
@@ -983,13 +1015,31 @@ func (s *lineattribute) String() string {
 }
 
 type cursor struct {
-	x       int
-	y       int
-	actualx int
+	x         int
+	y         int
+	actualx   int
+	selection selection
 }
 
 func (c *cursor) String() string {
 	return fmt.Sprintf("{x: %v, y: %v, actualx: %v}", c.x, c.y, c.actualx)
+}
+
+type selection interface {
+	isselection()
+}
+
+type lineselection struct {
+	selection
+	lines []int
+}
+
+type charsselection struct {
+	selection
+	startx int
+	starty int
+	endx   int
+	endy   int
 }
 
 type screen struct {
@@ -1024,7 +1074,7 @@ func newscreen(term terminal, x, y, width, height int, file file, theme *theme, 
 		width:   width,
 		height:  height,
 		file:    file,
-		cursors: []*cursor{{0, 0, 0}},
+		cursors: []*cursor{{0, 0, 0, nil}},
 		xoffset: 0,
 		yoffset: 0,
 		lines:   []*line{},
@@ -1110,7 +1160,7 @@ func (s *screen) statusline() []byte {
 		color = slices.Repeat([]int{51}, len(l.buffer))
 	}
 
-	return []byte(l.cutandcolorize(0, s.width-(s.linenumberwidth+1), color, []int{}))
+	return []byte(l.cutandcolorize(0, s.width-(s.linenumberwidth+1), color, []int{}, []int{}))
 }
 
 func (s *screen) curline(c *cursor) *line {
@@ -1240,17 +1290,32 @@ func (s *screen) render(force bool) {
 		line := s.lines[y]
 		linenumber := fmt.Sprintf("%v\x1b[38;5;243m%v\x1b[0m", strings.Repeat(" ", s.linenumberwidth-calcdigit(y+1)), y+1)
 
+		colors := s.lineattrs[y].colors
 		cursor := []int{}
+		selections := []int{}
 		if s.focused {
 			for _, c := range _cursors {
-				if c.c.y != y {
-					continue
+				// configure cursor line
+				if c.c.y == y {
+					cursor = append(cursor, c.charidx)
 				}
 
-				cursor = append(cursor, c.charidx)
+				// configure selected chars
+				switch sl := c.c.selection.(type) {
+				case *lineselection:
+					if slices.Contains(sl.lines, y) {
+						selections = make([]int, len(s.lineattrs[y].colors))
+						for i := range selections {
+							selections[i] = 3
+						}
+					}
+				case *charsselection:
+					// todo: implement
+				}
 			}
 		}
-		return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), s.lineattrs[y].colors, cursor))
+		debug(0, "selections: %v", selections)
+		return []byte(linenumber + " " + line.cutandcolorize(s.xoffset, s.width-1-(s.linenumberwidth+1), colors, selections, cursor))
 	}
 
 	if scrolled || s.scrolled || force {
@@ -1471,6 +1536,9 @@ func (s *screen) handle(curmode mode, buff *input, buffchan <-chan *input) mode 
 			case 'l':
 				s.movecursors(right, num)
 
+			case 'x':
+				s.selectline()
+				newmode = lineselect
 			}
 
 		}
@@ -1503,6 +1571,22 @@ func (s *screen) handle(curmode mode, buff *input, buffchan <-chan *input) mode 
 
 		case _not_special_key:
 			s.insertcharsatcursors([]*character{newcharacter(buff.r)})
+		}
+
+	case lineselect:
+		switch buff.special {
+		case _esc:
+			s.unselectalllines()
+			newmode = normal
+
+		case _not_special_key:
+			switch buff.r {
+			case 'j':
+				s.moveandselectline(down, num)
+
+			case 'k':
+				s.moveandselectline(up, num)
+			}
 		}
 
 	default:
@@ -1750,6 +1834,53 @@ func (s *screen) deletecursors() {
 		s.registerRenderLine(c.y)
 	}
 	s.cursors = slices.Delete(s.cursors, 0, len(s.cursors)-1)
+}
+
+/* selection */
+
+func (s *screen) selectline() {
+	for _, c := range s.cursors {
+		switch sl := c.selection.(type) {
+		case *lineselection:
+			sl.lines = append(sl.lines, c.y)
+
+		case *charsselection:
+			c.selection = &lineselection{lines: []int{c.y}}
+
+		default:
+			c.selection = &lineselection{lines: []int{c.y}}
+		}
+
+		// when selecting a line, move cursor to line tail
+		s.movecursorfunc(c, func(c *cursor) (int, int) {
+			return s.curline(c).width() - 1, c.y
+		})
+
+		s.linestoberendered = append(s.linestoberendered, c.y)
+	}
+}
+
+func (s *screen) moveandselectline(direction direction, cnt int) {
+	for _, c := range s.cursors {
+		// move to above/below line
+		s.movecursor(c, direction, cnt)
+		// move to line tail
+		s.movecursorfunc(c, func(c *cursor) (int, int) {
+			return s.curline(c).width() - 1, c.y
+		})
+		sl := c.selection.(*lineselection)
+		sl.lines = append(sl.lines, c.y)
+	}
+}
+
+func (s *screen) unselectalllines() {
+	for _, c := range s.cursors {
+		sl := c.selection.(*lineselection)
+		for _, l := range sl.lines {
+			s.registerRenderLine(l)
+		}
+		c.selection = nil
+	}
 }
 
 /* text modification */
@@ -2372,14 +2503,14 @@ func (e *editor) render(first bool) {
 	e.term.clearline(e.height - 1)
 	if !e.errmsg.empty() {
 		red := slices.Repeat([]int{1}, len(e.errmsg.buffer))
-		e.term.write([]byte(e.errmsg.cutandcolorize(0, e.width, red, []int{})))
+		e.term.write([]byte(e.errmsg.cutandcolorize(0, e.width, red, []int{}, []int{})))
 	} else if !e.msg.empty() {
-		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{}, []int{})))
+		e.term.write([]byte(e.msg.cutandcolorize(0, e.width, []int{}, []int{}, []int{})))
 	} else if e.mode == command {
 		cursor := []int{e.cmdx + 1}
 		cl := e.commandline()
 		cl.delnl()
-		e.term.write([]byte(cl.cutandcolorize(0, e.width, []int{}, cursor)))
+		e.term.write([]byte(cl.cutandcolorize(0, e.width, []int{}, []int{}, cursor)))
 	}
 
 	if e.windowchanged {
@@ -2621,6 +2752,10 @@ func start(term terminal, in io.Reader, file file, theme *theme) {
 					newmode := e.activewin.screen.handle(e.mode, buff, buffchan)
 					e.changemode(newmode)
 				}
+
+			case lineselect:
+				newmode := e.activewin.screen.handle(e.mode, buff, buffchan)
+				e.changemode(newmode)
 
 			default:
 				panic("unknown mode")
