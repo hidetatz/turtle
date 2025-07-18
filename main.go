@@ -307,7 +307,11 @@ func (l *line) cutandcolorize(from, width int, colors []int, bgcolors []int, inv
 			runes = append(runes, ' ')
 			widths = append(widths, 1)
 			_colors = append(_colors, -1)
-			_bgcolors = append(_bgcolors, -1)
+			if len(bgcolors) != 0 {
+				_bgcolors = append(_bgcolors, bgcolors[i])
+			} else {
+				_bgcolors = append(_bgcolors, -1)
+			}
 			if slices.Contains(inverts, i) {
 				length := len(runes)
 				_inverts = append(_inverts, length-1)
