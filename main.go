@@ -27,7 +27,7 @@ var _debuglevel int
 func init() {
 	d := os.Getenv("TURTLE_DEBUG")
 	if d == "" {
-		_debuglevel = 0
+		_debuglevel = -1
 		return
 	}
 
