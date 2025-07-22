@@ -28,12 +28,12 @@ tt test.txt
 
 Some behavior can be customized via command line flag.
 
-* `--theme` configures the color theme. Default is "doraemon". Choices are:
-  - "doraemon"
-  - "noby" (or "nobita")
-  - "sue" (or "shizuka")
-  - "sneech" (or "suneo")
-  - "big-g" (or "gian")
+* `--theme` configures the color theme. Default is "doraemon". Choose from:
+  - doraemon
+  - nobita
+  - shizuka
+  - suneo
+  - gian
 
 ## multi-cursor
 

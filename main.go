@@ -2775,7 +2775,7 @@ finish:
 
 func main() {
 	var (
-		_theme = flag.String("theme", "doraemon", "theme name, choose from [doraemon, noby (or nobita), sue (or shizuka), sneech (or suneo), big-g (or gian)]")
+		_theme = flag.String("theme", "doraemon", "theme name, choose from [doraemon, nobita, shizuka, suneo, gian]")
 	)
 	flag.Parse()
 
@@ -2783,13 +2783,13 @@ func main() {
 	switch *_theme {
 	case "doraemon":
 		theme = theme_doraemon
-	case "noby", "nobita":
+	case "nobita":
 		theme = theme_nobita
-	case "sue", "shizuka":
+	case "shizuka":
 		theme = theme_shizuka
-	case "sneech", "suneo":
+	case "suneo":
 		theme = theme_suneo
-	case "big-g", "gian":
+	case "gian":
 		theme = theme_gian
 	}
 
