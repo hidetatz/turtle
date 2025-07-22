@@ -1470,7 +1470,7 @@ func (s *screen) handle(curmode mode, buff *input, buffchan <-chan *input) mode 
 				s.deletecursors()
 
 			case 'd':
-				s.deletecursorchar()
+				s.deleteselections()
 
 			case 'o':
 				s.insertlinefromcursors(down)
@@ -1898,7 +1898,7 @@ func (s *screen) insertcharsatcursors(chars []*character) {
 	}
 }
 
-func (s *screen) deletecursorchar() {
+func (s *screen) deleteselections() {
 	for i, c := range s.cursors {
 		if s.atlinetail(c) && c.y+1 < len(s.lines) {
 			// when removing nl, concat current and next line

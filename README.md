@@ -49,8 +49,9 @@ By default, turtle editor is in normal mode.
 For some commands, leading number before command executes the command n-times.
 For example, `3j` moves the cursor down by 3 times.
 
-* `i`: enter insert mode
-* `:`: enter command mode
+* `i`: enter the insert mode
+* `:`: enter the command mode
+* `x`: select current line and enter the line-selection mode
 * `C`: add cursor below
 * `,`: close cursors except the last one
 * `h`: move left
@@ -93,6 +94,14 @@ Every command is executed after Enter keypress.
 In insert mode, you can edit the text.
 
 * `Esc`: exit insert mode
+
+### line-selection mode
+
+In line-selection mode, you can select the lines.
+
+* `j`: move down to select the line
+* `k`: move up to select the line
+* `Esc`: discard the current selection and get back to normal mode
 
 ## development
 
