@@ -64,6 +64,7 @@ For example, `3j` moves the cursor down by 3 times.
 * `o`: insert a line **below** the current cursor, then enter insert mode
 * `O`: insert a line **above** the current cursor, then enter insert mode
 * `d`: delete a character
+* `p`: paste current yank
 * `<number> G`: move to the \<number\> line
 * `gg`: move to the text head
 * `ge`: move to the text bottom
@@ -101,6 +102,7 @@ In line-selection mode, you can select the lines.
 
 * `j`: move down to select the line
 * `k`: move up to select the line
+* `y`: yank selected lines
 * `Esc`: discard the current selection and get back to normal mode
 
 ## development

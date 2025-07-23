@@ -1046,6 +1046,39 @@ type charsselection struct {
 	endy   int
 }
 
+type regtexttype int
+
+const (
+	regtext_lines regtexttype = iota + 1
+	regtext_chars
+)
+
+type regtext struct {
+	typ   regtexttype
+	lines []*line
+	chars []*character
+}
+
+type register struct {
+	regs []map[string]*regtext
+}
+
+func (r *register) get(idx int, key string) (*regtext, bool) {
+	if len(r.regs) <= idx {
+		return nil, false
+	}
+
+	return r.regs[idx][key], true
+}
+
+func (r *register) set(idx int, key string, txt *regtext) {
+	if len(r.regs) <= idx {
+		r.regs = append(r.regs, make(map[string]*regtext))
+	}
+
+	r.regs[idx][key] = txt
+}
+
 type screen struct {
 	focused         bool
 	term            *screenterm
@@ -1057,7 +1090,7 @@ type screen struct {
 	file            file
 	linenumberwidth int
 
-	yankedch *character
+	register *register
 
 	cursors []*cursor
 
@@ -1073,15 +1106,16 @@ type screen struct {
 
 func newscreen(term terminal, x, y, width, height int, file file, theme *theme, focused bool) *screen {
 	s := &screen{
-		focused: focused,
-		term:    &screenterm{term: term, width: width, x: x, y: y},
-		width:   width,
-		height:  height,
-		file:    file,
-		cursors: []*cursor{{0, 0, 0, nil}},
-		xoffset: 0,
-		yoffset: 0,
-		lines:   []*line{},
+		focused:  focused,
+		term:     &screenterm{term: term, width: width, x: x, y: y},
+		width:    width,
+		height:   height,
+		file:     file,
+		register: &register{},
+		cursors:  []*cursor{{0, 0, 0, nil}},
+		xoffset:  0,
+		yoffset:  0,
+		lines:    []*line{},
 	}
 
 	// read file and initialize s.lines
@@ -1485,6 +1519,9 @@ func (s *screen) handle(curmode mode, buff *input, buffchan <-chan *input) mode 
 					s.movecursorstoline(num)
 				}
 
+			case 'p':
+				s.pastefromcursors()
+
 			/*
 			 * goto mode
 			 */
@@ -1590,6 +1627,11 @@ func (s *screen) handle(curmode mode, buff *input, buffchan <-chan *input) mode 
 
 			case 'k':
 				s.moveandselectline(up, num)
+
+			case 'y':
+				s.yankselectedlines()
+				s.unselectalllines()
+				newmode = normal
 			}
 		}
 
@@ -1887,6 +1929,17 @@ func (s *screen) unselectalllines() {
 	}
 }
 
+func (s *screen) yankselectedlines() {
+	for i, c := range s.cursors {
+		sl := c.selection.(*lineselection)
+		lines := make([]*line, len(sl.lines))
+		for i := range sl.lines {
+			lines[i] = s.lines[sl.lines[i]].copy()
+		}
+		s.register.set(i, "\"", &regtext{typ: regtext_lines, lines: lines})
+	}
+}
+
 /* text modification */
 
 func (s *screen) insertcharsatcursors(chars []*character) {
@@ -2014,6 +2067,29 @@ func (s *screen) splitcursorsline() {
 		c.x = 0
 
 		s.shiftcursors(down, i+1, 1)
+	}
+	s.dirty = true
+}
+
+func (s *screen) pastefromcursors() {
+	for i, c := range s.cursors {
+		txt, ok := s.register.get(i, "\"")
+		if !ok {
+			break
+		}
+
+		if txt.typ == regtext_lines {
+			for i := range txt.lines {
+				s.insline(c, down)
+				s.movecursor(c, down, 1)
+				s.lines[c.y] = txt.lines[i]
+				c.x = s.lines[c.y].width() - 1
+				s.registerRenderLine(c.y)
+				s.shiftcursors(down, i+1, 1)
+			}
+		} else {
+
+		}
 	}
 	s.dirty = true
 }
